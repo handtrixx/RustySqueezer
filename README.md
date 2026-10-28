@@ -40,6 +40,12 @@ Same input always produces byte-identical output, which keeps prefix caches warm
 agent ──► local-compact ──► structured summary (~5-10% of the original thread)
 ```
 
+## Deployment (PoC)
+
+On our homelab host it runs as container `local-compact` (internal only, no public
+route), registered in LiteLLM as model `local-compact` so it can be selected as a
+Zed `compaction_model`. It is not enabled by default yet.
+
 ## Quick start
 
 ```bash
