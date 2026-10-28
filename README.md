@@ -98,19 +98,28 @@ Everything is environment driven (see `.env.example`):
     max_input_tokens: 1000000
 ```
 
-**Zed** (`~/.config/zed/settings.json`):
+**Zed** (`~/.config/zed/settings.json`) - declare the model under your
+OpenAI-compatible provider with a large window, then point compaction at it:
 
 ```json
 {
+  "language_models": {
+    "openai_compatible": {
+      "MyGateway": {
+        "api_url": "http://localhost:8000/v1",
+        "api_key": "none",
+        "available_models": [
+          { "name": "local-compact", "max_tokens": 1000000, "capabilities": { "chat_completions": true } }
+        ]
+      }
+    }
+  },
   "agent": {
-    "compaction_model": { "provider": "openai_compatible", "model": "local-compact" },
-    "thread_summary_model": { "provider": "openai_compatible", "model": "local-compact" }
+    "compaction_model": { "provider": "MyGateway", "model": "local-compact" },
+    "thread_summary_model": { "provider": "MyGateway", "model": "local-compact" }
   }
 }
 ```
-
-Declare the model under the provider with a large `max_tokens` so Zed never
-refuses the oversized compaction request.
 
 ## Limitations (PoC)
 
