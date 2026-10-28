@@ -43,11 +43,24 @@ Same input always produces byte-identical output, which keeps prefix caches warm
 agent ──► local-compact ──► structured summary (~5-10% of the original thread)
 ```
 
-## Deployment (PoC)
+## Images and deployment
 
-On our homelab host it runs as container `local-compact` (internal only, no public
-route), registered in LiteLLM as model `local-compact` so it can be selected as a
-Zed `compaction_model`. It is not enabled by default yet.
+CI (`.github/workflows/build-image.yml`) builds the images on every push to `main`
+and publishes them to GitHub Container Registry, so deployments never build from
+source:
+
+| tag | contents |
+|---|---|
+| `ghcr.io/handtrixx/local-compact:latest` | Rust binary from `rust/Dockerfile` |
+| `ghcr.io/handtrixx/local-compact:<sha>` | the same, pinned to the commit |
+| `ghcr.io/handtrixx/local-compact:python` | Python PoC from `Dockerfile` |
+
+On the homelab host the deploy directory `/data/docker/local-compact` holds only
+`compose.yml`, `.env` and `README.md` - it pulls `ghcr.io/handtrixx/local-compact:latest`
+and runs container `local-compact` (internal only, no public route). The package is
+private, so the host needs `docker login ghcr.io` once. The service is registered in
+LiteLLM as model `local-compact` so it can be selected as a Zed `compaction_model`;
+it is not enabled by default yet.
 
 ## Quick start
 
