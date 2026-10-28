@@ -1,0 +1,38 @@
+name: build-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/handtrixx/local-compact
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and publish Rust image
+        run: |
+          docker build -t "$IMAGE:latest" rust
+          docker build -t "$IMAGE:${GITHUB_SHA}" rust
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_REPOSITORY_OWNER" --password-stdin
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:${GITHUB_SHA}"
+
+  python:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and publish Python (PoC) image
+        run: |
+          docker build -t "$IMAGE:python" .
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_REPOSITORY_OWNER" --password-stdin
+          docker push "$IMAGE:python"
