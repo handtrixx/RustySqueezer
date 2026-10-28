@@ -33,8 +33,11 @@ run(["git", "config", "user.name", "Niklas Stephan"])
 run(["git", "config", "user.email", "pooh85@gmx.de"])
 run(["git", "add", "-A"])
 run(["git", "commit", "-m", "Initial PoC: deterministic fake-LLM context compactor"])
-url = "https://%s@github.com/%s.git" % ("handtrixx", REPO)
-p = subprocess.run(["git", "push", url, "main"], cwd=DIR, capture_output=True, text=True)
+url = "https://oauth2:%s@github.com/%s.git" % (t, REPO)
+p = subprocess.run(
+    ["git", "push", url, "main"], cwd=DIR, capture_output=True, text=True,
+    env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+)
 if p.returncode != 0:
     print("push failed (token hidden):", p.stderr.replace(t, "***"))
     sys.exit(1)
