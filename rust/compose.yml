@@ -1,0 +1,22 @@
+# Rust port of local-compact (single static-ish binary, negligible startup).
+# Drop-in replacement for the Python PoC compose: same env vars, same port.
+services:
+  local-compact:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_NAME: local-compact
+      MAX_SUMMARY_CHARS: "12000"
+      TAIL_TURNS: "6"
+      ASSIST_ENABLED: "false"
+      # Uncomment to let a small local model add generative highlights:
+      # ASSIST_ENABLED: "true"
+      # ASSIST_MODEL_URL: http://host.docker.internal:8080/v1
+      # ASSIST_MODEL: local-small
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

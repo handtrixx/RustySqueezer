@@ -1,0 +1,160 @@
+use regex::Regex;
+use serde_json::Value;
+use std::sync::LazyLock;
+
+/// Stopwords for task-term scoring (mirrors app.py STOP).
+pub fn stop_words() -> std::collections::HashSet<String> {
+    "the an and or to in for on with by been being \
+     it that we you i he into about \
+     then here what which who how do does did not no yes can could should \
+     would will but if so any some all more other also"
+        .split_whitespace()
+        .map(|w| w.to_string())
+        .collect()
+}
+
+static TOKEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z0-9_./-]{3,}").unwrap());
+
+static FILE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"[\w./-]+\.(?:py|rs|ts|tsx|js|jsx|json|ya?ml|toml|md|sh|bash|html|css|sql|txt|log|lock|go|cpp|c|h|Dockerfile)",
+    )
+    .unwrap()
+});
+
+static ERROR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:^|\s)(?:error|errors|failed|fails|exception|traceback|denied|exit code|cannot|unable|not found|timeout)").unwrap()
+});
+
+static COMPACT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"summariz|summarise|compact|condense|conversation so far|context window").unwrap()
+});
+
+/// Plain text of a message, handling string and multipart content.
+pub fn msg_text(msg: &Value) -> String {
+    match msg.get("content") {
+        None => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|p| {
+                if p.is_object() && p.get("type") == Some(&Value::String("text".into())) {
+                    Some(
+                        p.get("text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(other) => other.to_string(),
+    }
+}
+
+pub fn is_compaction_instruction(text: &str) -> bool {
+    COMPACT_RE.is_match(&text.to_lowercase()) && text.chars().count() < 4000
+}
+
+/// Split on newlines, then on sentence ends; keep order.
+/// (Python uses a lookbehind split; the regex crate has no lookbehind, so
+/// sentence ends are detected manually.)
+pub fn sentence_list(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        for s in split_sentences(line) {
+            let s = s.trim();
+            if s.chars().count() >= 20 {
+                out.push(s.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn split_sentences(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < chars.len() {
+        if ".!?".contains(chars[i]) {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j > i + 1 {
+                out.push(chars[start..=i].iter().collect());
+                start = j;
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if start < chars.len() {
+        out.push(chars[start..].iter().collect());
+    }
+    out
+}
+
+pub fn tokenize(text: &str) -> Vec<String> {
+    TOKEN_RE
+        .find_iter(&text.to_lowercase())
+        .map(|m| m.as_str().to_string())
+        .collect()
+}
+
+pub fn term_counts(text: &str) -> std::collections::HashMap<String, usize> {
+    let stop = stop_words();
+    let mut counts = std::collections::HashMap::new();
+    for t in tokenize(text) {
+        if !stop.contains(&t) {
+            *counts.entry(t).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+pub fn file_matches(text: &str) -> Vec<String> {
+    FILE_RE.find_iter(text).map(|m| m.as_str().to_string()).collect()
+}
+
+pub fn has_error(text: &str) -> bool {
+    ERROR_RE.is_match(text)
+}
+
+pub fn clip(text: &str, n: usize) -> String {
+    let t = text.trim();
+    let len = t.chars().count();
+    if len <= n {
+        return t.to_string();
+    }
+    if n < 3 {
+        return "...".to_string();
+    }
+    let kept: String = t.chars().take(n - 3).collect();
+    format!("{}...", kept)
+}
+
+pub fn dedup_keep_order(items: &[String], cap: usize) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for it in items {
+        if seen.insert(it.clone()) {
+            out.push(it.clone());
+            if out.len() >= cap {
+                break;
+            }
+        }
+    }
+    out
+}

@@ -1,6 +1,9 @@
 # local-compact
 
-**Status: proof of concept.** Not hardened, no tests beyond a smoke script, no production deployment guarantees.
+**Status: proof of concept, with a Rust port.** The `rust/` directory is a
+byte-for-byte port of `app.py` (axum, single binary, parity-tested against the
+Python service); Python remains the deployed PoC. Not hardened, no production
+deployment guarantees.
 
 `local-compact` is a *fake LLM*: an OpenAI-compatible HTTP endpoint that answers
 context-compaction requests **deterministically**, without calling any language
@@ -63,10 +66,24 @@ Or with Docker:
 docker compose up -d
 ```
 
+### Rust port (`rust/`)
+
+Same behaviour, same environment variables, byte-identical summaries:
+
+```bash
+cd rust
+cargo build --release            # or: docker compose up -d (rust/compose.yml)
+./target/release/local-compact   # listens on :8000, PORT env honoured
+```
+
+Parity check against the Python service (start `app.py` on :8001, the Rust
+binary on :8002, then `./rust/parity_test.sh`).
+
 Smoke test (synthetic ~11k-character thread, checks determinism):
 
 ```bash
-python test_thread.py
+python test_thread.py          # against app.py
+cargo test                     # in rust/: determinism + section tests
 ```
 
 ## Configuration
@@ -134,8 +151,8 @@ OpenAI-compatible provider with a large window, then point compaction at it:
    section templates and output format, so it works out of the box for other agent
    harnesses (Claude Code, OpenClaw, custom pipelines) instead of being tied to
    Zed's compaction prompt.
-2. **Rewrite in Rust** - `axum`/`actix` + a proper tokeniser, single static binary,
-   negligible startup and memory footprint, easy sidecar deployment.
+2. ~~Rewrite in Rust~~ - done (`rust/`, axum + serde_json, single binary,
+   ~3.5 MB, parity-tested); a proper tokeniser is still ahead.
 3. Real token counting (tiktoken-equivalent) instead of the chars/4 estimate.
 4. Evaluation harness (needle-in-thread recall, SWE-bench-style fidelity) so
    compression quality is measurable.
