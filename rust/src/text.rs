@@ -16,20 +16,30 @@ pub fn stop_words() -> std::collections::HashSet<String> {
 static TOKEN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9_./-]{3,}").unwrap());
 
-static FILE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"[\w./-]+\.(?:py|rs|ts|tsx|js|jsx|json|ya?ml|toml|md|sh|bash|html|css|sql|txt|log|lock|go|cpp|c|h|Dockerfile)",
-    )
-    .unwrap()
-});
-
-static ERROR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:^|\s)(?:error|errors|failed|fails|exception|traceback|denied|exit code|cannot|unable|not found|timeout)").unwrap()
-});
-
-static COMPACT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"summariz|summarise|compact|condense|conversation so far|context window").unwrap()
-});
+/// Deterministic word-boundary token count (mirrors app.py count_tokens):
+/// each run of ASCII alphanumerics/apostrophes is one token, every other
+/// non-whitespace character (punctuation, non-ASCII) counts as one. Not exact
+/// cl100k BPE, but far closer to real tokenisation than chars/4.
+pub fn count_tokens(text: &str) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let mut tokens = 0usize;
+    let mut i = 0usize;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch.is_ascii_alphanumeric() || ch == '\'' {
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '\'') {
+                i += 1;
+            }
+            tokens += 1;
+        } else if !ch.is_whitespace() {
+            tokens += 1;
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    tokens
+}
 
 /// Plain text of a message, handling string and multipart content.
 pub fn msg_text(msg: &Value) -> String {
@@ -56,8 +66,8 @@ pub fn msg_text(msg: &Value) -> String {
     }
 }
 
-pub fn is_compaction_instruction(text: &str) -> bool {
-    COMPACT_RE.is_match(&text.to_lowercase()) && text.chars().count() < 4000
+pub fn is_compaction_instruction(text: &str, cfg: &crate::config::Config) -> bool {
+    cfg.compact_re.is_match(&text.to_lowercase()) && text.chars().count() < cfg.instruction_max_chars
 }
 
 /// Split on newlines, then on sentence ends; keep order.
@@ -124,12 +134,12 @@ pub fn term_counts(text: &str) -> std::collections::HashMap<String, usize> {
     counts
 }
 
-pub fn file_matches(text: &str) -> Vec<String> {
-    FILE_RE.find_iter(text).map(|m| m.as_str().to_string()).collect()
+pub fn file_matches(text: &str, cfg: &crate::config::Config) -> Vec<String> {
+    cfg.file_re.find_iter(text).map(|m| m.as_str().to_string()).collect()
 }
 
-pub fn has_error(text: &str) -> bool {
-    ERROR_RE.is_match(text)
+pub fn has_error(text: &str, cfg: &crate::config::Config) -> bool {
+    cfg.error_re.is_match(text)
 }
 
 pub fn clip(text: &str, n: usize) -> String {
@@ -157,4 +167,18 @@ pub fn dedup_keep_order(items: &[String], cap: usize) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_counting() {
+        assert_eq!(count_tokens("Hello, world!"), 4);
+        assert_eq!(count_tokens("docker compose up -d"), 5); // - and d count separately
+        assert_eq!(count_tokens(""), 0);
+        assert_eq!(count_tokens("don't"), 1);
+        assert_eq!(count_tokens("caf\u{e9} status"), 3); // non-ASCII char = 1 token
+    }
 }

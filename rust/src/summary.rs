@@ -13,7 +13,7 @@ struct Scored {
     text: String,
 }
 
-fn tool_facts(thread: &[Value]) -> (Vec<String>, Vec<String>, Vec<String>) {
+fn tool_facts(thread: &[Value], cfg: &Config) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut commands = Vec::new();
     let mut files = Vec::new();
     let mut tools = Vec::new();
@@ -53,12 +53,17 @@ fn tool_facts(thread: &[Value]) -> (Vec<String>, Vec<String>, Vec<String>) {
                 }
             }
         }
-        files.extend(file_matches(&msg_text(m)));
+        files.extend(file_matches(&msg_text(m), cfg));
     }
     (commands, files, tools)
 }
 
-fn score_sentences(sents: &[String], task_terms: &HashSet<String>, recency_weight: f64) -> Vec<Scored> {
+fn score_sentences(
+    sents: &[String],
+    task_terms: &HashSet<String>,
+    recency_weight: f64,
+    cfg: &Config,
+) -> Vec<Scored> {
     let n = sents.len().max(1);
     let mut scored = Vec::with_capacity(sents.len());
     for (i, s) in sents.iter().enumerate() {
@@ -70,10 +75,10 @@ fn score_sentences(sents: &[String], task_terms: &HashSet<String>, recency_weigh
         if s.chars().any(|c| c.is_ascii_digit()) {
             bonus += 0.5;
         }
-        if !file_matches(s).is_empty() {
+        if !file_matches(s, cfg).is_empty() {
             bonus += 1.0;
         }
-        if has_error(s) {
+        if has_error(s, cfg) {
             bonus += 0.5;
         }
         scored.push(Scored {
@@ -141,7 +146,7 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     let mut instruction = String::new();
     if let Some(last) = thread.last() {
         if last.get("role").and_then(|r| r.as_str()) == Some("user")
-            && is_compaction_instruction(&msg_text(last))
+            && is_compaction_instruction(&msg_text(last), cfg)
         {
             instruction = msg_text(last);
             thread.pop();
@@ -160,7 +165,7 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         }
     }
 
-    let (commands, files, tools) = tool_facts(&thread);
+    let (commands, files, tools) = tool_facts(&thread, cfg);
 
     let first = if !user_msgs.is_empty() {
         user_msgs[0].clone()
@@ -179,37 +184,42 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     }
 
     let mut parts: Vec<String> = Vec::new();
-    parts.push("## Conversation summary (deterministic compaction by local-compact)".to_string());
+    parts.push(format!("## {}", cfg.title("header")));
     if !instruction.is_empty() {
-        parts.push("(Compaction requested by the agent harness; the task below is the original request.)".to_string());
+        parts.push(cfg.title("note"));
     }
-    if !user_msgs.is_empty() {
+    if cfg.section_enabled("original_task") && !user_msgs.is_empty() {
         parts.push(format!(
-            "\n## Original task\n{}",
+            "\n## {}\n{}",
+            cfg.title("original_task"),
             clip(&msg_text(&user_msgs[0]), 1500)
         ));
     }
-    if user_msgs.len() > 1 {
+    if cfg.section_enabled("followups") && user_msgs.len() > 1 {
         let followups: Vec<String> = user_msgs[1..]
             .iter()
             .map(|u| format!("- {}", clip(&msg_text(u), 300)))
             .collect();
         parts.push(format!(
-            "\n## Follow-up user messages\n{}",
+            "\n## {}\n{}",
+            cfg.title("followups"),
             followups.join("\n")
         ));
     }
-    if !commands.is_empty() {
-        let mut recent: Vec<String> = commands.iter().take(cfg.max_commands).cloned().collect();
+    if cfg.section_enabled("commands") && !commands.is_empty() {
+        let start = commands.len().saturating_sub(cfg.max_commands);
+        let mut recent: Vec<String> = commands[start..].iter().cloned().collect();
         recent.reverse();
         parts.push(format!(
-            "\n## Commands run (most recent first)\n{}",
+            "\n## {}\n{}",
+            cfg.title("commands"),
             recent.iter().map(|c| format!("- `{}`", c)).collect::<Vec<_>>().join("\n")
         ));
     }
-    if !files.is_empty() {
+    if cfg.section_enabled("files") && !files.is_empty() {
         parts.push(format!(
-            "\n## Files/paths involved\n{}",
+            "\n## {}\n{}",
+            cfg.title("files"),
             dedup_keep_order(&files, cfg.max_files)
                 .iter()
                 .map(|f| format!("- `{}`", f))
@@ -217,7 +227,7 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
                 .join("\n")
         ));
     }
-    if !tools.is_empty() {
+    if cfg.section_enabled("tools") && !tools.is_empty() {
         // Count with insertion order, then sort by count descending (stable),
         // which matches Counter.most_common tie behaviour.
         let mut order: Vec<(String, usize)> = Vec::new();
@@ -234,7 +244,8 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
             .collect();
         pairs.sort_by(|a, b| b.1.cmp(&a.1));
         parts.push(format!(
-            "\n## Tools used\n{}",
+            "\n## {}\n{}",
+            cfg.title("tools"),
             pairs
                 .iter()
                 .take(10)
@@ -247,15 +258,16 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     for m in &thread {
         for line in msg_text(m).lines() {
             let l = line.trim();
-            if has_error(line) && (10..=300).contains(&l.chars().count()) {
+            if has_error(line, cfg) && (10..=300).contains(&l.chars().count()) {
                 errors.push(l.to_string());
             }
         }
     }
     let errors = dedup_keep_order(&errors, cfg.max_errors);
-    if !errors.is_empty() {
+    if cfg.section_enabled("errors") && !errors.is_empty() {
         parts.push(format!(
-            "\n## Errors / problems seen\n{}",
+            "\n## {}\n{}",
+            cfg.title("errors"),
             errors.iter().map(|e| format!("- {}", e)).collect::<Vec<_>>().join("\n")
         ));
     }
@@ -263,15 +275,16 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         .iter()
         .flat_map(|m| sentence_list(&msg_text(m)))
         .collect();
-    let mut key = score_sentences(&all_sents, &task_terms, 2.0);
+    let mut key = score_sentences(&all_sents, &task_terms, 2.0, cfg);
     // Python: sorted(..., reverse=True) on (score, sentence) tuples: score
     // descending, then lexicographic descending; stable for equal tuples.
     key.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
         .then(b.text.cmp(&a.text)));
     key.truncate(cfg.max_key_points);
-    if !key.is_empty() {
+    if cfg.section_enabled("key_points") && !key.is_empty() {
         parts.push(format!(
-            "\n## Key points from the assistant\n{}",
+            "\n## {}\n{}",
+            cfg.title("key_points"),
             key.iter()
                 .map(|k| format!("- {}", clip(&k.text, 300)))
                 .collect::<Vec<_>>()
@@ -299,15 +312,18 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         }
         tail_lines.push(format!("[{}] {}", role, text));
     }
-    parts.push(format!(
-        "\n## Most recent turns (verbatim, clipped)\n{}",
-        tail_lines.join("\n\n")
-    ));
+    if cfg.section_enabled("tail") {
+        parts.push(format!(
+            "\n## {}\n{}",
+            cfg.title("tail"),
+            tail_lines.join("\n\n")
+        ));
+    }
     if cfg.assist_enabled {
         let joined: Vec<String> = thread.iter().map(|m| msg_text(m)).collect();
         let assist = assist_summarize(cfg, &joined.join("\n")).await;
         if !assist.is_empty() {
-            parts.push(format!("\n## Small-model highlights\n{}", assist));
+            parts.push(format!("\n## {}\n{}", cfg.title("assist"), assist));
         }
     }
     let summary = parts.join("\n");

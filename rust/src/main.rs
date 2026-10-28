@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use config::Config;
 use summary::build_summary;
-use text::msg_text;
+use text::{count_tokens, msg_text};
 
 async fn health(State(cfg): State<Config>) -> impl IntoResponse {
     Json(serde_json::json!({
@@ -42,12 +42,12 @@ async fn completions(State(cfg): State<Config>, Json(body): Json<Value>) -> Resp
 
     let summary = build_summary(&messages, &cfg).await;
 
-    let prompt_chars: usize = messages.iter().map(|m| msg_text(m).chars().count()).sum();
-    let completion_chars = summary.chars().count();
+    let prompt_tokens: usize = messages.iter().map(|m| count_tokens(&msg_text(m))).sum();
+    let completion_tokens = count_tokens(&summary);
     let usage = serde_json::json!({
-        "prompt_tokens": prompt_chars / 4,
-        "completion_tokens": completion_chars / 4,
-        "total_tokens": (prompt_chars + completion_chars) / 4,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
     });
 
     if !stream {

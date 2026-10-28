@@ -2,8 +2,9 @@
 
 **Status: proof of concept, with a Rust port.** The `rust/` directory is a
 byte-for-byte port of `app.py` (axum, single binary, parity-tested against the
-Python service); Python remains the deployed PoC. Not hardened, no production
-deployment guarantees.
+Python service); both are deployed-ready and CI-built. Not hardened, no
+production deployment guarantees. Generic configuration (any agent harness),
+deterministic token counting and an evaluation harness landed 2026-10-28.
 
 `local-compact` is a *fake LLM*: an OpenAI-compatible HTTP endpoint that answers
 context-compaction requests **deterministically**, without calling any language
@@ -38,6 +39,25 @@ For every `POST /v1/chat/completions` it:
    `ASSIST_ENABLED=true` (any OpenAI-compatible endpoint: llama.cpp, Ollama, vLLM).
 
 Same input always produces byte-identical output, which keeps prefix caches warm.
+
+## Generic configuration (for other harnesses)
+
+Detection rules, error/file patterns, enabled sections and section titles are
+configurable through a JSON file (see `config.example.json`), pointed at with
+the `CONFIG_PATH` environment variable - so the compactor can be tuned for
+Claude Code, OpenClaw or custom pipelines instead of Zed's prompt shape:
+
+```json
+{
+  "instruction_patterns": ["wrap up", "shrink the transcript"],
+  "sections": ["original_task", "commands", "tail"],
+  "section_titles": {"commands": "Commands executed"}
+}
+```
+
+Unknown keys are ignored, `section_titles` merges partially, and the `MAX_*`
+/ `TAIL_*` env variables (see below) still override the file. Defaults equal
+the original Zed-tuned behaviour, so parity with previous builds is kept.
 
 ```text
 agent ──► local-compact ──► structured summary (~5-10% of the original thread)
@@ -103,7 +123,17 @@ cargo test                     # in rust/: determinism + section tests
 
 Everything is environment driven (see `.env.example`):
 
-| Variable | Default | Meaning |
+### Token counting
+
+`usage` reports real deterministic token counts, not the old `chars / 4`
+estimate: every run of ASCII alphanumerics/apostrophes is one token and every
+other non-whitespace character counts as one (implemented identically in both
+languages, so Python and Rust agree). It is an approximation, not exact cl100k
+BPE - good enough for budgeting and compression-ratio reporting.
+
+## Configuration
+
+Everything is environment driven (see `.env.example`):
 |---|---|---|
 | `MODEL_NAME` | `local-compact` | Model id exposed on `/v1/models` |
 | `MAX_SUMMARY_CHARS` | `12000` | Hard cap on the summary length |
@@ -151,25 +181,40 @@ OpenAI-compatible provider with a large window, then point compaction at it:
 }
 ```
 
+## Evaluation harness
+
+`eval/eval.py` runs synthetic threads with known needles (facts that must
+survive compaction) against a live instance and reports needle recall,
+compression ratio and determinism:
+
+```bash
+python eval/eval.py --url http://localhost:8000/v1          # local instance
+python eval/eval.py --url https://ai.handtrixxx.com/v1      # via LiteLLM gateway
+```
+
+Exit code is non-zero when recall drops below the threshold, so it doubles as
+a regression check before deploying an update.
+
 ## Limitations (PoC)
 
 - Extractive, not abstractive: it can lose nuance in very long, meandering threads.
 - Heuristics (regex for errors, sentence splitting) are tuned for code-agent traffic.
-- Token counts in `usage` are `chars / 4` estimates, not real tokenisation.
+- Token counting is word-boundary based, not exact cl100k BPE.
 - Only the OpenAI chat-completion shape is implemented (no Anthropic `/messages`, no embeddings).
 
 ## Roadmap
 
-1. **Make it generic** - one config file (or `.env`) covering the detection rules,
-   section templates and output format, so it works out of the box for other agent
-   harnesses (Claude Code, OpenClaw, custom pipelines) instead of being tied to
-   Zed's compaction prompt.
+1. ~~Make it generic~~ - done 2026-10-28: `config.example.json` + `CONFIG_PATH`
+   cover detection rules, error/file patterns, sections and titles (env vars
+   still override). Section *templates* per harness are a possible next step.
 2. ~~Rewrite in Rust~~ - done (`rust/`, axum + serde_json, single binary,
-   ~3.5 MB, parity-tested); a proper tokeniser is still ahead.
-3. Real token counting (tiktoken-equivalent) instead of the chars/4 estimate.
-4. Evaluation harness (needle-in-thread recall, SWE-bench-style fidelity) so
-   compression quality is measurable.
-5. Anthropic Messages API + Ollama native surface.
+   ~3.5 MB, parity-tested).
+3. ~~Real token counting~~ - done 2026-10-28 (deterministic word-boundary
+   tokenizer, identical in Python and Rust; exact cl100k remains out of scope).
+4. ~~Evaluation harness~~ - done 2026-10-28 (`eval/eval.py`: needle recall,
+   compression ratio, determinism against any endpoint).
+5. Anthropic Messages API + Ollama native surface - postponed.
+6. Quality tuning against real agent threads (the harness makes this measurable).
 
 ## License
 

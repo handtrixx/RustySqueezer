@@ -1,0 +1,36 @@
+{
+  "model_name": "local-compact",
+  "max_summary_chars": 12000,
+  "tail_turns": 6,
+  "tail_chars": 600,
+  "max_commands": 25,
+  "max_files": 60,
+  "max_errors": 20,
+  "max_key_points": 40,
+  "instruction_patterns": [
+    "summariz|summarise|compact|condense|conversation so far|context window"
+  ],
+  "instruction_max_chars": 4000,
+  "error_pattern": "(?:^|\\s)(?:error|errors|failed|fails|exception|traceback|denied|exit code|cannot|unable|not found|timeout)",
+  "file_extensions": [
+    "py", "rs", "ts", "tsx", "js", "jsx", "json", "ya?ml", "toml", "md",
+    "sh", "bash", "html", "css", "sql", "txt", "log", "lock", "go", "cpp", "c", "h", "Dockerfile"
+  ],
+  "sections": [
+    "original_task", "followups", "commands", "files", "tools",
+    "errors", "key_points", "tail"
+  ],
+  "section_titles": {
+    "header": "Conversation summary (deterministic compaction by local-compact)",
+    "note": "(Compaction requested by the agent harness; the task below is the original request.)",
+    "original_task": "Original task",
+    "followups": "Follow-up user messages",
+    "commands": "Commands run (most recent first)",
+    "files": "Files/paths involved",
+    "tools": "Tools used",
+    "errors": "Errors / problems seen",
+    "key_points": "Key points from the assistant",
+    "tail": "Most recent turns (verbatim, clipped)",
+    "assist": "Small-model highlights"
+  }
+}

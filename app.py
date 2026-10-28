@@ -16,6 +16,7 @@ caching when Zed re-compacts).
 import json
 import os
 import re
+import sys
 import time
 import urllib.request
 from collections import Counter
@@ -23,29 +24,110 @@ from collections import Counter
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# All behaviour is driven by environment variables (see .env.example).
-def _int(name, default):
-    try:
-        return int(os.environ.get(name, default))
-    except ValueError:
-        return default
+# Behaviour is configurable through a JSON config file (CONFIG_PATH env) so the
+# compactor can serve harnesses other than Zed: detection rules, error/file
+# patterns, enabled sections and section titles. Environment variables (see
+# .env.example) override the config file; the defaults reproduce the original
+# Zed-tuned behaviour, so parity with the older builds is kept.
+DEFAULT_CONFIG = {
+    "model_name": "local-compact",
+    "max_summary_chars": 12000,
+    "tail_turns": 6,
+    "tail_chars": 600,
+    "max_commands": 25,
+    "max_files": 60,
+    "max_errors": 20,
+    "max_key_points": 40,
+    "assist_url": "",
+    "assist_model": "local-small",
+    "assist_enabled": False,
+    "assist_max_input_chars": 2500,
+    "assist_max_tokens": 500,
+    "instruction_patterns": [
+        "summariz|summarise|compact|condense|conversation so far|context window"
+    ],
+    "instruction_max_chars": 4000,
+    "error_pattern": (
+        r"(?:^|\s)(?:error|errors|failed|fails|exception|traceback|denied|exit code|cannot|unable|not found|timeout)"
+    ),
+    "file_extensions": [
+        "py", "rs", "ts", "tsx", "js", "jsx", "json", "ya?ml", "toml", "md",
+        "sh", "bash", "html", "css", "sql", "txt", "log", "lock", "go", "cpp",
+        "c", "h", "Dockerfile",
+    ],
+    # Enabled sections in output order; drop one to omit it from the summary.
+    "sections": [
+        "original_task", "followups", "commands", "files", "tools",
+        "errors", "key_points", "tail",
+    ],
+    "section_titles": {
+        "header": "Conversation summary (deterministic compaction by local-compact)",
+        "note": "(Compaction requested by the agent harness; the task below is the original request.)",
+        "original_task": "Original task",
+        "followups": "Follow-up user messages",
+        "commands": "Commands run (most recent first)",
+        "files": "Files/paths involved",
+        "tools": "Tools used",
+        "errors": "Errors / problems seen",
+        "key_points": "Key points from the assistant",
+        "tail": "Most recent turns (verbatim, clipped)",
+        "assist": "Small-model highlights",
+    },
+}
 
 
-MODEL = os.environ.get("MODEL_NAME", "local-compact")
-MAX_SUMMARY_CHARS = _int("MAX_SUMMARY_CHARS", 12000)
-TAIL_TURNS = _int("TAIL_TURNS", 6)
-TAIL_CHARS = _int("TAIL_CHARS", 600)
-MAX_COMMANDS = _int("MAX_COMMANDS", 25)
-MAX_FILES = _int("MAX_FILES", 60)
-MAX_ERRORS = _int("MAX_ERRORS", 20)
-MAX_KEY_POINTS = _int("MAX_KEY_POINTS", 40)
-# Optional generative assist: any OpenAI-compatible endpoint (llama.cpp, ollama,
-# vLLM, ...). Disabled by default so the service is pure and deterministic.
-ASSIST_URL = os.environ.get("ASSIST_MODEL_URL", "")
-ASSIST_MODEL = os.environ.get("ASSIST_MODEL", "local-small")
-ASSIST_ENABLED = os.environ.get("ASSIST_ENABLED", "false").lower() in ("1", "true")
-ASSIST_MAX_INPUT_CHARS = _int("ASSIST_MAX_INPUT_CHARS", 2500)
-ASSIST_MAX_TOKENS = _int("ASSIST_MAX_TOKENS", 500)
+def load_config():
+    cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+    path = os.environ.get("CONFIG_PATH", "")
+    if path:
+        try:
+            with open(path) as f:
+                for key, value in json.load(f).items():
+                    if isinstance(value, dict) and isinstance(cfg.get(key), dict):
+                        cfg[key].update(value)  # partial overrides merge with defaults
+                    else:
+                        cfg[key] = value
+        except (OSError, ValueError) as exc:
+            print(f"local-compact: ignoring CONFIG_PATH {path}: {exc}", file=sys.stderr)
+    if "MODEL_NAME" in os.environ:
+        cfg["model_name"] = os.environ["MODEL_NAME"]
+    for env, key in (
+        ("MAX_SUMMARY_CHARS", "max_summary_chars"),
+        ("TAIL_TURNS", "tail_turns"),
+        ("TAIL_CHARS", "tail_chars"),
+        ("MAX_COMMANDS", "max_commands"),
+        ("MAX_FILES", "max_files"),
+        ("MAX_ERRORS", "max_errors"),
+        ("MAX_KEY_POINTS", "max_key_points"),
+        ("ASSIST_MAX_INPUT_CHARS", "assist_max_input_chars"),
+        ("ASSIST_MAX_TOKENS", "assist_max_tokens"),
+    ):
+        if env in os.environ:
+            try:
+                cfg[key] = int(os.environ[env])
+            except ValueError:
+                pass
+    cfg["assist_url"] = os.environ.get("ASSIST_MODEL_URL", cfg["assist_url"])
+    cfg["assist_model"] = os.environ.get("ASSIST_MODEL", cfg["assist_model"])
+    cfg["assist_enabled"] = os.environ.get("ASSIST_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+    return cfg
+
+
+CFG = load_config()
+
+MODEL = CFG["model_name"]
+MAX_SUMMARY_CHARS = int(CFG["max_summary_chars"])
+TAIL_TURNS = int(CFG["tail_turns"])
+TAIL_CHARS = int(CFG["tail_chars"])
+MAX_COMMANDS = int(CFG["max_commands"])
+MAX_FILES = int(CFG["max_files"])
+MAX_ERRORS = int(CFG["max_errors"])
+MAX_KEY_POINTS = int(CFG["max_key_points"])
+ASSIST_URL = CFG["assist_url"]
+ASSIST_MODEL = CFG["assist_model"]
+ASSIST_ENABLED = bool(CFG["assist_enabled"])
+ASSIST_MAX_INPUT_CHARS = int(CFG["assist_max_input_chars"])
+ASSIST_MAX_TOKENS = int(CFG["assist_max_tokens"])
 
 app = FastAPI(title=MODEL)
 
@@ -57,12 +139,10 @@ STOP = set(
 )
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]{3,}")
-FILE_RE = re.compile(
-    r"[\w./-]+\.(?:py|rs|ts|tsx|js|jsx|json|ya?ml|toml|md|sh|bash|html|css|sql|txt|log|lock|go|cpp|c|h|Dockerfile)"
-)
-ERROR_RE = re.compile(
-    r"(?:^|\s)(?:error|errors|failed|fails|exception|traceback|denied|exit code|cannot|unable|not found|timeout)",
-    re.I,
+FILE_RE = re.compile(r"[\w./-]+\.(?:" + "|".join(CFG["file_extensions"]) + r")")
+ERROR_RE = re.compile(CFG["error_pattern"], re.I)
+COMPACT_RE = re.compile(
+    "|".join("(?:%s)" % p for p in CFG["instruction_patterns"]), re.I
 )
 
 
@@ -79,10 +159,31 @@ def msg_text(msg):
 
 
 def is_compaction_instruction(text):
-    t = text.lower()
-    return bool(
-        re.search(r"summariz|summarise|compact|condense|conversation so far|context window", t)
-    ) and len(text) < 4000
+    return bool(COMPACT_RE.search(text.lower())) and len(text) < int(CFG["instruction_max_chars"])
+
+
+def count_tokens(text):
+    """Deterministic word-boundary token count used for `usage` reporting.
+
+    Not exact cl100k BPE, but far closer to real tokenisation than the old
+    chars/4 estimate: every run of ASCII alphanumerics/apostrophes is one
+    token, and every other non-whitespace character (punctuation, non-ASCII)
+    counts as one. Implemented identically in the Rust port so the two agree.
+    """
+    tokens = 0
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch.isascii() and (ch.isalnum() or ch == "'"):
+            while i < n and text[i].isascii() and (text[i].isalnum() or text[i] == "'"):
+                i += 1
+            tokens += 1
+        elif not ch.isspace():
+            tokens += 1
+            i += 1
+        else:
+            i += 1
+    return tokens
 
 
 def sentence_list(text):
@@ -214,34 +315,36 @@ def build_summary(messages):
     for m in user_msgs[1:]:
         task_terms.update(t for t in term_counts(msg_text(m)) if len(t) > 4)
 
+    sections = CFG["sections"]
+    titles = CFG["section_titles"]
     parts = []
-    parts.append("## Conversation summary (deterministic compaction by local-compact)")
+    parts.append("## " + titles["header"])
     if instruction:
-        parts.append("(Compaction requested by the agent harness; the task below is the original request.)")
-    if user_msgs:
-        parts.append("\n## Original task\n" + clip(msg_text(user_msgs[0]), 1500))
-    if user_msgs[1:]:
+        parts.append(titles["note"])
+    if "original_task" in sections and user_msgs:
+        parts.append("\n## " + titles["original_task"] + "\n" + clip(msg_text(user_msgs[0]), 1500))
+    if "followups" in sections and user_msgs[1:]:
         followups = "\n".join("- " + clip(msg_text(u), 300) for u in user_msgs[1:])
-        parts.append("\n## Follow-up user messages\n" + followups)
-    if commands:
-        parts.append("\n## Commands run (most recent first)\n" + "\n".join(f"- `{c}`" for c in reversed(commands[:MAX_COMMANDS])))
-    if files:
-        parts.append("\n## Files/paths involved\n" + "\n".join(f"- `{f}`" for f in dedup_keep_order(files, MAX_FILES)))
-    if tools:
+        parts.append("\n## " + titles["followups"] + "\n" + followups)
+    if "commands" in sections and commands:
+        parts.append("\n## " + titles["commands"] + "\n" + "\n".join(f"- `{c}`" for c in reversed(commands[-MAX_COMMANDS:])))
+    if "files" in sections and files:
+        parts.append("\n## " + titles["files"] + "\n" + "\n".join(f"- `{f}`" for f in dedup_keep_order(files, MAX_FILES)))
+    if "tools" in sections and tools:
         counts = Counter(tools)
-        parts.append("\n## Tools used\n" + ", ".join(f"{t} ({n})" for t, n in counts.most_common(10)))
+        parts.append("\n## " + titles["tools"] + "\n" + ", ".join(f"{t} ({n})" for t, n in counts.most_common(10)))
     errors = []
     for m in thread:
         for line in msg_text(m).splitlines():
             if ERROR_RE.search(line) and 10 <= len(line.strip()) <= 300:
                 errors.append(line.strip())
     errors = dedup_keep_order(errors, MAX_ERRORS)
-    if errors:
-        parts.append("\n## Errors / problems seen\n" + "\n".join("- " + e for e in errors))
+    if "errors" in sections and errors:
+        parts.append("\n## " + titles["errors"] + "\n" + "\n".join("- " + e for e in errors))
     all_sents = [s for m in assistant_msgs for s in sentence_list(msg_text(m))]
     key = sorted(score_sentences(all_sents, task_terms, recency_weight=2.0), reverse=True)[:MAX_KEY_POINTS]
-    if key:
-        parts.append("\n## Key points from the assistant\n" + "\n".join("- " + clip(s, 300) for _, s in key))
+    if "key_points" in sections and key:
+        parts.append("\n## " + titles["key_points"] + "\n" + "\n".join("- " + clip(s, 300) for _, s in key))
     # Verbatim tail: the turns the agent actually needs to continue from.
     tail = thread[-TAIL_TURNS:]
     tail_lines = []
@@ -252,11 +355,12 @@ def build_summary(messages):
             calls = "; ".join(tc.get("function", {}).get("name", "") for tc in m["tool_calls"])
             text = (text + f" [tool calls: {calls}]").strip()
         tail_lines.append(f"[{role}] {text}")
-    parts.append("\n## Most recent turns (verbatim, clipped)\n" + "\n\n".join(tail_lines))
+    if "tail" in sections:
+        parts.append("\n## " + titles["tail"] + "\n" + "\n\n".join(tail_lines))
     if ASSIST_ENABLED:
         assist = assist_summarize("\n".join(msg_text(m) for m in thread))
         if assist:
-            parts.append("\n## Small-model highlights\n" + assist)
+            parts.append("\n## " + titles["assist"] + "\n" + assist)
     summary = "\n".join(parts)
     if len(summary) > MAX_SUMMARY_CHARS:
         summary = summary[: MAX_SUMMARY_CHARS - 20] + "\n[summary truncated]"
@@ -285,10 +389,12 @@ async def completions(request: Request):
     messages = body.get("messages", [])
     stream = bool(body.get("stream"))
     summary = build_summary(messages)
+    prompt_tokens = sum(count_tokens(msg_text(m)) for m in messages)
+    completion_tokens = count_tokens(summary)
     usage = {
-        "prompt_tokens": sum(len(msg_text(m)) for m in messages) // 4,
-        "completion_tokens": len(summary) // 4,
-        "total_tokens": (sum(len(msg_text(m)) for m in messages) + len(summary)) // 4,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
     }
     if not stream:
         return JSONResponse(
