@@ -16,6 +16,8 @@ jobs:
       - run: docker run -d --name rustysqueezer-eval -p 8000:8000 rustysqueezer-eval
       - run: sleep 3 && curl -fsS http://localhost:8000/health
       - run: python3 eval/eval.py --url http://localhost:8000/v1
+      - name: Anthropic/Ollama surface parity tests
+        run: python3 eval/surfaces.py --url http://localhost:8000
 
   rust:
     runs-on: ubuntu-latest

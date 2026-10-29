@@ -2,6 +2,18 @@
 
 All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
 
+## v1.0.2 - 2026-10-29
+- **Anthropic Messages surface** (`POST /v1/messages`): accepts the top-level
+  `system` string and content-block messages, responds in Anthropic message
+  format (`content: [{type: "text", ...}]`, `usage: {input_tokens, output_tokens}`),
+  including proper SSE streaming (`message_start`, `content_block_delta`, `message_end`).
+- **Ollama native surface** (`POST /api/chat`, `POST /api/generate`,
+  `GET /api/tags`): `response` + `done` payloads, NDJSON streaming, and raw-prompt
+  compaction via `/api/generate`. All surfaces return byte-identical summaries
+  for the same thread; `eval/surfaces.py` verifies shape, usage counts and
+  parity and runs in CI.
+- Docs site rebuilt with BeerCSS (Material Design 3 layout, teal primary).
+
 ## v1.0.1 - 2026-10-29
 - **Hardened image.** Builder is now a pinned `rust:1.99-alpine` toolchain
   producing a fully static musl binary (`crt-static`), so the runtime image

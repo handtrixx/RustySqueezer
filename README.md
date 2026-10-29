@@ -94,10 +94,16 @@ curl -s localhost:8000/v1/models
 | `GET` | `/health` | `{"status":"ok","model":"rustysqueezer"}` |
 | `GET` | `/v1/models` | the single model id (`MODEL_NAME`) |
 | `POST` | `/v1/chat/completions` | returns the summary as the assistant message |
+| `POST` | `/v1/messages` | Anthropic Messages API (v1.0.2): top-level `system` string, content blocks, SSE streaming |
+| `POST` | `/api/chat` | Ollama native chat endpoint (v1.0.2): `response` + `done`, NDJSON streaming |
+| `POST` | `/api/generate` | Ollama completion endpoint: compacts a raw `prompt` string |
+| `GET` | `/api/tags` | Ollama model discovery (single model id) |
 
 `/v1/chat/completions` accepts the usual OpenAI shape (`model`, `messages`,
 `stream`) and answers non-streaming JSON or SSE (`stream: true`, 2000-char
-deltas, then `[DONE]`). It is a compactor, not a general chat model: any request
+deltas, then `[DONE]`). `/v1/messages` and `/api/chat` are the same compactor
+behind Anthropic/Ollama response shapes - `eval/surfaces.py` asserts byte-parity
+between all surfaces. It is a compactor, not a general chat model: any request
 is answered with a summary of the thread it was given.
 
 ```bash
@@ -257,8 +263,8 @@ Layout: `rust/src/main.rs` (axum routes), `rust/src/summary.rs` (the compactor),
 - Heuristics (error regex, sentence splitting, file patterns) are tuned for
   code-agent traffic; retune them via `config.json` for other harnesses.
 - Token counting is word-boundary based, not exact cl100k BPE.
-- Only the OpenAI chat-completion surface is implemented - no Anthropic
-  `/messages`, no embeddings, no tool calling.
+- Anthropic Messages and Ollama surfaces exist (v1.0.2), but there are no
+  embeddings and no tool calling.
 - No authentication: run it on a private network or behind a reverse proxy.
 
 ## Roadmap
@@ -270,7 +276,7 @@ Layout: `rust/src/main.rs` (axum routes), `rust/src/summary.rs` (the compactor),
 4. ~~Evaluation harness~~ - done 2026-10-28, extended 2026-10-29 with ratio and
    budget assertions and wired into CI.
 5. ~~Per-section budgeting~~ - done 2026-10-29.
-6. Anthropic Messages API and Ollama native surface - open.
+6. ~~Anthropic Messages API and Ollama native surface~~ - done 2026-10-29 (v1.0.2).
 7. Quality tuning against real agent threads (the harness makes this measurable).
 
 ## License
