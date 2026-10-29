@@ -184,8 +184,12 @@ publishes to GitHub Container Registry, so deployments never build from source:
 |---|---|
 | `ghcr.io/handtrixx/rustysqueezer:latest` | Rust binary from `rust/Dockerfile` |
 | `ghcr.io/handtrixx/rustysqueezer:<sha>` | the same, pinned to the commit |
+| `ghcr.io/handtrixx/rustysqueezer:<version>` / `:v<version>` | version from `Cargo.toml`, tagged automatically by CI - pin this in deployments |
 
-The image is public - no `docker login` required.
+The image is public - no `docker login` required. It is a fully static
+musl binary on `scratch` (no shell, no package manager, non-root user),
+with the toolchain tag pinned and bumped by Dependabot; the healthcheck
+uses the binary itself (`/rustysqueezer --health`).
 `rust/compose.yml` is a ready-made single-service compose file; the binary is
 ~3.5 MB and starts instantly.
 

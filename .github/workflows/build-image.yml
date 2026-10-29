@@ -20,10 +20,12 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve crate version
+        run: echo "SQUEEZER_VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' rust/Cargo.toml)" >> "$GITHUB_ENV"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -36,3 +38,11 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/rustysqueezer:latest
             ghcr.io/${{ github.repository_owner }}/rustysqueezer:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/rustysqueezer:${{ env.SQUEEZER_VERSION }}
+            ghcr.io/${{ github.repository_owner }}/rustysqueezer:v${{ env.SQUEEZER_VERSION }}
+      - name: Tag the release if this version is not yet tagged
+        run: |
+          if ! git ls-remote --tags origin "refs/tags/v${SQUEEZER_VERSION}" | grep -q .; then
+            git tag "v${SQUEEZER_VERSION}"
+            git push origin "v${SQUEEZER_VERSION}"
+          fi

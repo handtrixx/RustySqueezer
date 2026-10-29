@@ -12,7 +12,8 @@ services:
       TAIL_TURNS: "6"
       # Uncomment to let a small local model add generative highlights:
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      # The scratch image has no curl; the binary probes its own /health.
+      test: ["CMD", "/rustysqueezer", "--health"]
       interval: 30s
       timeout: 5s
       retries: 3

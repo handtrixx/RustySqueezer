@@ -1,12 +1,16 @@
-FROM rust:latest AS builder
+# Pinned toolchain; Dependabot bumps this tag (see .github/dependabot.yml)
+# so base-image updates arrive as PRs that CI builds and eval-tests.
+FROM rust:1.99-alpine AS builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src src
+# The musl target is statically linked by default: the runtime image needs
+# nothing but the binary.
 RUN cargo build --release
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /src/target/release/rustysqueezer /usr/local/bin/rustysqueezer
+# Shell-free runtime: no package manager, no curl, no apt surface.
+FROM scratch
+COPY --from=builder /src/target/release/rustysqueezer /rustysqueezer
 EXPOSE 8000
-CMD ["rustysqueezer"]
+USER 65534:65534
+ENTRYPOINT ["/rustysqueezer"]

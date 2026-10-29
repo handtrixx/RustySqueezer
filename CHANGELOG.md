@@ -2,6 +2,22 @@
 
 All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
 
+## v1.0.1 - 2026-10-29
+- **Hardened image.** Builder is now a pinned `rust:1.99-alpine` toolchain
+  producing a fully static musl binary (`crt-static`), so the runtime image
+  is `scratch`: no shell, no package manager, no `curl`, runs as a
+  non-root user. Image size drops from ~90 MB to ~10 MB.
+- **Shell-free healthcheck.** The binary accepts `--health` and probes its
+  own `/health` over plain TCP; compose/Docker healthchecks use it directly
+  (`test: ["CMD", "/rustysqueezer", "--health"]`).
+- **Automatic versioning on every build.** CI reads the crate version from
+  `Cargo.toml` and publishes the image as `:latest`, `:<sha>`, `:<version>`
+  and `:v<version>`, and creates the matching `v<version>` git tag if it
+  does not exist yet. Deployments should pin the version tag (e.g. `1.0.1`)
+  instead of `:latest`.
+- **Dependabot** watches the pinned Docker base image and `Cargo.lock`
+  weekly; bumps arrive as PRs that CI builds and runs the eval harness on.
+
 ## v1.0.0 - 2026-10-29
 - **Generative assist removed.** The optional `ASSIST_*` path (a small local LLM
   writing "highlights") was measured and dropped: 12-24 s of CPU latency per

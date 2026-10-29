@@ -79,12 +79,7 @@ async fn completions(State(cfg): State<Config>, Json(body): Json<Value>) -> Resp
         "data: {\"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}]}\n\n",
     );
     sse.push_str("data: [DONE]\n\n");
-    (
-        StatusCode::OK,
-        [("content-type", "text/event-stream")],
-        sse,
-    )
-        .into_response()
+    (StatusCode::OK, [("content-type", "text/event-stream")], sse).into_response()
 }
 
 fn chrono_like_now() -> u64 {
@@ -94,6 +89,31 @@ fn chrono_like_now() -> u64 {
         .as_secs()
 }
 
+// Container healthcheck for the shell-free (scratch) image: a raw std-TCP
+// probe of our own /health endpoint, so compose needs no curl in the image.
+fn self_health(port: u16) -> i32 {
+    use std::io::{Read, Write};
+    let mut stream = match std::net::TcpStream::connect(("127.0.0.1", port)) {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    if stream
+        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return 1;
+    }
+    let mut buf = Vec::new();
+    if stream.read_to_end(&mut buf).is_err() {
+        return 1;
+    }
+    if String::from_utf8_lossy(&buf).starts_with("HTTP/1.1 200") {
+        0
+    } else {
+        1
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cfg = Config::from_env();
@@ -101,6 +121,10 @@ async fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8000);
+
+    if std::env::args().any(|a| a == "--health") {
+        std::process::exit(self_health(port));
+    }
 
     let app = Router::new()
         .route("/health", get(health))
