@@ -205,7 +205,7 @@ OpenAI-compatible model with a large window, then point compaction at it:
 {
   "language_models": {
     "openai_compatible": {
-      "LocalCompact": {
+      "RustySqueezer": {
         "api_url": "http://localhost:8000/v1",
         "api_key": "none",
         "available_models": [
@@ -215,8 +215,8 @@ OpenAI-compatible model with a large window, then point compaction at it:
     }
   },
   "agent": {
-    "compaction_model": { "provider": "LocalCompact", "model": "rustysqueezer" },
-    "thread_summary_model": { "provider": "LocalCompact", "model": "rustysqueezer" }
+    "compaction_model": { "provider": "RustySqueezer", "model": "rustysqueezer" },
+    "thread_summary_model": { "provider": "RustySqueezer", "model": "rustysqueezer" }
   }
 }
 ```
