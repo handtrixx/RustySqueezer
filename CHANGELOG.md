@@ -2,7 +2,7 @@
 
 All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
 
-## 2026-10-29
+## v1.0.0 - 2026-10-29
 - **Generative assist removed.** The optional `ASSIST_*` path (a small local LLM
   writing "highlights") was measured and dropped: 12-24 s of CPU latency per
   compaction, non-deterministic output, and at a 2 % budget the model's output was
