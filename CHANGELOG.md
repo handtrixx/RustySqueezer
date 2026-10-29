@@ -4,6 +4,11 @@ All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
 
 ## 2026-10-29
 
+- **Renamed**: the project, crate, container and model id are now
+  **RustySqueezer** (`rustysqueezer` for ids/tags). The repo was renamed on
+  GitHub (old URL redirects), CI now publishes
+  `ghcr.io/handtrixx/rustysqueezer`, and the old `local-compact` GHCR package
+  was deleted.
 - Documentation cleanup for public release: README restructured (why / how it
   works / API / configuration / evaluation / deployment / agent wiring /
   limitations / roadmap), this CHANGELOG added. The repository is now public.
