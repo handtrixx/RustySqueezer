@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::text::{
-    clip, dedup_keep_order, file_matches, has_error, is_compaction_instruction, msg_text,
-    dedup_normalized, sentence_list, term_counts,
+    clip, dedup_keep_order, file_matches, has_error, has_fact_signal, is_compaction_instruction,
+    msg_text, normalize, salient_lines, sentence_list, term_counts,
 };
 
 struct Scored {
@@ -44,7 +44,8 @@ fn tool_facts(thread: &[Value], cfg: &Config) -> (Vec<String>, Vec<String>, Vec<
                         }
                     }
                     for key in ["path", "file_path", "p", "target"] {
-                        if let Some(val) = args.get(key).and_then(|v| v.as_str()).map(|v| v.trim()) {
+                        if let Some(val) = args.get(key).and_then(|v| v.as_str()).map(|v| v.trim())
+                        {
                             if !val.is_empty() {
                                 files.push(val.to_string());
                             }
@@ -58,15 +59,18 @@ fn tool_facts(thread: &[Value], cfg: &Config) -> (Vec<String>, Vec<String>, Vec<
     (commands, files, tools)
 }
 
+/// Scores sentences for the key-points section. `sents` is a `(text, weight)`
+/// list so different message roles can carry different authority.
 fn score_sentences(
-    sents: &[String],
+    sents: &[(String, f64)],
     task_terms: &HashSet<String>,
     recency_weight: f64,
     cfg: &Config,
+    occurrences: &HashMap<String, usize>,
 ) -> Vec<Scored> {
     let n = sents.len().max(1);
     let mut scored = Vec::with_capacity(sents.len());
-    for (i, s) in sents.iter().enumerate() {
+    for (i, (s, weight)) in sents.iter().enumerate() {
         let hit = term_counts(s)
             .keys()
             .filter(|t| task_terms.contains(t.as_str()))
@@ -81,25 +85,37 @@ fn score_sentences(
         if has_error(s, cfg) {
             bonus += 0.5;
         }
+        // Concrete facts (versions, IPs, counts, status words) are exactly what a
+        // compaction must not lose, so they outrank generic prose.
+        if has_fact_signal(s) {
+            bonus += 1.5;
+        }
+        // A sentence repeated across the thread (tool retries, follow-up quotes)
+        // is more central than a one-off mention.
+        let reps = occurrences.get(&normalize(s)).copied().unwrap_or(1);
+        if reps > 1 {
+            bonus += 0.4 * (reps - 1).min(6) as f64;
+        }
         scored.push(Scored {
-            score: hit + bonus + recency_weight * (i as f64 / n as f64),
+            score: (hit + bonus + recency_weight * (i as f64 / n as f64)) * weight,
             text: s.clone(),
         });
     }
     scored
 }
 
-
 /// Keep lines in order while they fit `cap` chars. Returns (kept, dropped).
 /// Deterministic greedy fill: instead of clipping the assembled summary at the
-/// end, every section is budgeted on its own.
+/// end, every section is budgeted on its own. A line that is too long for the
+/// remaining budget is skipped rather than ending the section, so a single
+/// verbose line cannot block several shorter, still-relevant ones.
 fn fit_lines(lines: &[String], cap: usize) -> (Vec<String>, usize) {
     let mut kept: Vec<String> = Vec::new();
     let mut used = 0usize;
     for line in lines {
         let cost = line.chars().count() + if kept.is_empty() { 0 } else { 1 };
         if used + cost > cap {
-            break;
+            continue;
         }
         used += cost;
         kept.push(line.clone());
@@ -114,7 +130,10 @@ fn section_body(lines: &[String], cap: usize, label: &str) -> String {
     let (kept, dropped) = fit_lines(lines, cap.saturating_sub(40));
     let mut body = kept.join("\n");
     if dropped > 0 {
-        body.push_str(&format!("\n(+{} more {} omitted by the budget)", dropped, label));
+        body.push_str(&format!(
+            "\n(+{} more {} omitted by the budget)",
+            dropped, label
+        ));
     }
     body
 }
@@ -191,7 +210,8 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
             cfg.title("original_task"),
             clip(
                 &msg_text(&user_msgs[0]),
-                cfg.section_cap("original_task", content_budget, total_share).min(1500),
+                cfg.section_cap("original_task", content_budget, total_share)
+                    .min(1500),
             )
         ));
     }
@@ -211,9 +231,17 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         ));
     }
     if cfg.section_enabled("commands") && !commands.is_empty() {
-        let start = commands.len().saturating_sub(cfg.max_commands);
-        let mut recent: Vec<String> = commands[start..].iter().cloned().collect();
-        recent.reverse();
+        // Most recent first, but collapse repeats: a retried ssh/git one-liner
+        // listed 5 times crowds out distinct commands within the budget.
+        let mut recent: Vec<String> = Vec::new();
+        for c in commands.iter().rev() {
+            if !recent.contains(c) {
+                recent.push(c.clone());
+                if recent.len() >= cfg.max_commands {
+                    break;
+                }
+            }
+        }
         let lines: Vec<String> = recent
             .iter()
             .map(|c| format!("- `{}`", clip(c, 200)))
@@ -221,18 +249,39 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("commands"),
-            section_body(&lines, cfg.section_cap("commands", content_budget, total_share), "commands")
+            section_body(
+                &lines,
+                cfg.section_cap("commands", content_budget, total_share),
+                "commands"
+            )
         ));
     }
     if cfg.section_enabled("files") && !files.is_empty() {
+        // Rank by how often a path actually appears (first-seen order breaks
+        // ties), so heavily used files survive the budget while incidental
+        // mentions get dropped.
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let mut order: Vec<String> = Vec::new();
+        for f in &files {
+            if !counts.contains_key(f) {
+                order.push(f.clone());
+            }
+            *counts.entry(f.clone()).or_insert(0) += 1;
+        }
+        let mut ranked: Vec<(String, usize)> =
+            order.iter().map(|f| (f.clone(), counts[f])).collect();
+        // sort_by is stable: equal counts keep first-seen order.
+        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        let lines: Vec<String> = ranked
+            .into_iter()
+            .take(cfg.max_files)
+            .map(|(f, _)| format!("- `{}`", clip(&f, 120)))
+            .collect();
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("files"),
             section_body(
-                &dedup_keep_order(&files, cfg.max_files)
-                    .iter()
-                    .map(|f| format!("- `{}`", clip(f, 120)))
-                    .collect::<Vec<_>>(),
+                &lines,
                 cfg.section_cap("files", content_budget, total_share),
                 "paths",
             )
@@ -249,10 +298,8 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
             }
             *counts.entry(t.clone()).or_insert(0) += 1;
         }
-        let mut pairs: Vec<(String, usize)> = order
-            .iter()
-            .map(|(t, _)| (t.clone(), counts[t]))
-            .collect();
+        let mut pairs: Vec<(String, usize)> =
+            order.iter().map(|(t, _)| (t.clone(), counts[t])).collect();
         pairs.sort_by(|a, b| b.1.cmp(&a.1));
         parts.push(format!(
             "\n## {}\n{}",
@@ -280,32 +327,78 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
             "\n## {}\n{}",
             cfg.title("errors"),
             section_body(
-                &errors.iter().map(|e| format!("- {}", e)).collect::<Vec<_>>(),
+                &errors
+                    .iter()
+                    .map(|e| format!("- {}", e))
+                    .collect::<Vec<_>>(),
                 cfg.section_cap("errors", content_budget, total_share),
                 "error lines",
             )
         ));
     }
-    let all_sents: Vec<String> = assistant_msgs
+    // Tool results are where the ground truth of a real thread lives (build
+    // logs, health output, eval results), so they feed the key-point pool too.
+    // They are weighted below the assistant's own prose so raw log lines cannot
+    // crowd out the assistant's conclusions.
+    const TOOL_WEIGHT: f64 = 0.6;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut pool: Vec<(String, f64)> = assistant_msgs
         .iter()
-        .flat_map(|m| sentence_list(&msg_text(m)))
+        .flat_map(|m| sentence_list(&msg_text(m)).into_iter().map(|s| (s, 1.0)))
         .collect();
+    for m in &thread {
+        if m.get("role").and_then(|r| r.as_str()) == Some("tool") {
+            // Raw tool logs are mostly non-sentential (docker ps rows, CI
+            // output); sentence_list would filter out the very lines that
+            // contain the facts, so take fact-signal lines instead.
+            for s in salient_lines(&msg_text(m)) {
+                pool.push((s, TOOL_WEIGHT));
+            }
+        }
+    }
     // Repeated tool chatter would otherwise fill the key-points budget with
-    // the same sentence ten times.
-    let all_sents = dedup_normalized(&all_sents);
-    let mut key = score_sentences(&all_sents, &task_terms, 2.0, cfg);
+    // the same sentence ten times; first occurrence wins.
+    let mut occurrences: HashMap<String, usize> = HashMap::new();
+    for (s, _) in &pool {
+        *occurrences.entry(normalize(s)).or_insert(0) += 1;
+    }
+    pool.retain(|(s, _)| seen.insert(normalize(s)));
+    let mut key = score_sentences(&pool, &task_terms, 2.0, cfg, &occurrences);
     // Order by score descending, then text descending, so ties are stable
     // and the output is reproducible.
-    key.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
-        .then(b.text.cmp(&a.text)));
-    key.truncate(cfg.max_key_points);
+    key.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.text.cmp(&a.text))
+    });
+    // Near-duplicate filter: paraphrases of the same fact (three commit-log
+    // lines, repeated "surfaces PASS") each consume a line of the budget and
+    // squeeze out distinct facts. Skip a candidate when >=75 % of its content
+    // tokens are already covered by an accepted point. Deterministic.
+    let mut selected: Vec<Scored> = Vec::new();
+    let mut used_tokens: Vec<HashSet<String>> = Vec::new();
+    for k in key {
+        let toks: HashSet<String> = term_counts(&k.text).keys().cloned().collect();
+        let dup = used_tokens.iter().any(|u| {
+            let inter = toks.iter().filter(|t| u.contains(t.as_str())).count();
+            !toks.is_empty() && inter * 4 >= 3 * toks.len().min(u.len())
+        });
+        if dup {
+            continue;
+        }
+        used_tokens.push(toks);
+        selected.push(k);
+    }
+    selected.truncate(cfg.max_key_points);
+    let key = selected;
     if cfg.section_enabled("key_points") && !key.is_empty() {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("key_points"),
             section_body(
                 &key.iter()
-                    .map(|k| format!("- {}", clip(&k.text, 300)))
+                    .map(|k| format!("- {}", clip(&k.text, 240)))
                     .collect::<Vec<_>>(),
                 cfg.section_cap("key_points", content_budget, total_share),
                 "key points",
@@ -316,10 +409,17 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     // budgeted last but kept first: if the tail does not fit, the oldest tail
     // turns are dropped (and reported), never the tail as a whole.
     let tail_start = thread.len().saturating_sub(cfg.tail_turns);
+    let tail_cap = cfg
+        .section_cap("tail", content_budget, total_share)
+        .saturating_sub(40);
+    // TAIL_CHARS is a floor, not a ceiling: if the tail's budget allows more per
+    // turn (e.g. 50 % of 12000 over 6 turns = ~950), use it. Otherwise the final
+    // assistant summary gets clipped while the section still has headroom.
+    let per_turn = cfg.tail_chars.max(tail_cap / cfg.tail_turns.max(1));
     let mut tail_lines = Vec::new();
     for m in &thread[tail_start..] {
         let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("?");
-        let mut text = clip(&msg_text(m), cfg.tail_chars);
+        let mut text = clip(&msg_text(m), per_turn);
         if let Some(calls) = m.get("tool_calls").and_then(|v| v.as_array()) {
             let names: Vec<String> = calls
                 .iter()
@@ -331,12 +431,14 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
                         .to_string()
                 })
                 .collect();
-            text = format!("{} [tool calls: {}]", text, names.join("; ")).trim().to_string();
+            text = format!("{} [tool calls: {}]", text, names.join("; "))
+                .trim()
+                .to_string();
         }
         tail_lines.push(format!("[{}] {}", role, text));
     }
     if cfg.section_enabled("tail") {
-        let cap = cfg.section_cap("tail", content_budget, total_share).saturating_sub(40);
+        let cap = tail_cap;
         // Fill from the most recent turn backwards, then restore order.
         let mut newest_first = tail_lines.clone();
         newest_first.reverse();
@@ -344,13 +446,12 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         let mut body = kept;
         body.reverse();
         if dropped > 0 {
-            body.insert(0, format!("(+{} older tail turns dropped by the budget)", dropped));
+            body.insert(
+                0,
+                format!("(+{} older tail turns dropped by the budget)", dropped),
+            );
         }
-        parts.push(format!(
-            "\n## {}\n{}",
-            cfg.title("tail"),
-            body.join("\n\n")
-        ));
+        parts.push(format!("\n## {}\n{}", cfg.title("tail"), body.join("\n\n")));
     }
     // Sections are budgeted individually, so this is only a safety net for a
     // misconfigured section_budgets map (shares summing to more than 100).
@@ -414,6 +515,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mid_thread_tool_output_reaches_key_points() {
+        let cfg = Config::from_env();
+        let mut thread: Vec<Value> = vec![json!({
+            "role": "user",
+            "content": "Deploy the compactor and report the measured numbers."
+        })];
+        // A distinctive fact that exists only in a tool result, well outside
+        // the verbatim tail (which only keeps the last few turns).
+        thread.push(json!({
+            "role": "assistant",
+            "content": "I will inspect the container and run the evaluation harness."
+        }));
+        thread.push(json!({
+            "role": "tool",
+            "content": "container 172.19.0.20:8000 is healthy; eval read 189312 prompt tokens and wrote 1284 summary tokens"
+        }));
+        for i in 0..12 {
+            thread.push(json!({
+                "role": "assistant",
+                "content": format!("Step {i}: routine follow-up work on the deployment continues without new findings here."),
+            }));
+        }
+        thread.push(json!({
+            "role": "user",
+            "content": "Please summarize the conversation so far so the agent can continue."
+        }));
+        let summary = build_summary(&thread, &cfg).await;
+        assert!(
+            summary.contains("172.19.0.20") && summary.contains("189312"),
+            "tool-output facts lost from key points:\n{summary}"
+        );
+    }
+
+    #[tokio::test]
     async fn determinism_and_sections() {
         let cfg = Config::from_env();
         let thread = synthetic_thread();
@@ -444,25 +579,34 @@ mod tests {
         let thread = synthetic_thread();
         let s = build_summary(&thread, &cfg).await;
         let len = s.chars().count();
-        assert!(len <= cfg.max_summary_chars, "summary must fit the budget ({len})");
+        assert!(
+            len <= cfg.max_summary_chars,
+            "summary must fit the budget ({len})"
+        );
         assert!(
             !s.contains("[summary truncated]"),
             "per-section budgeting should make the hard clip unnecessary"
         );
         // The newest turns (including the docker compose ps tool call) are what
         // the agent needs to continue; they must not be the first thing cut.
-        assert!(s.contains("Most recent turns"), "tail section must be present");
-        assert!(s.contains("docker compose ps"), "verbatim tail must survive");
+        assert!(
+            s.contains("Most recent turns"),
+            "tail section must be present"
+        );
+        assert!(
+            s.contains("docker compose ps"),
+            "verbatim tail must survive"
+        );
     }
 
     #[test]
     fn section_shares_normalise_over_enabled_sections() {
         let mut cfg = Config::from_env();
         cfg.sections = vec!["commands".into(), "tail".into()];
-        // 12 + 50 shares: the tail still gets the bigger slice, and the two
+        // 12 + 30 shares: the tail still gets the bigger slice, and the two
         // together use the whole content budget.
-        let tail = cfg.section_cap("tail", 1000, 62);
-        let commands = cfg.section_cap("commands", 1000, 62);
+        let tail = cfg.section_cap("tail", 1000, 42);
+        let commands = cfg.section_cap("commands", 1000, 42);
         assert!(tail > commands);
         // Integer division may leave at most one char of slack.
         assert!(tail + commands >= 999, "shares should use the whole budget");
@@ -478,7 +622,9 @@ mod tests {
 
     #[test]
     fn sentence_splitting_keeps_only_full_sentences() {
-        let s = sentence_list("First sentence is long enough here. Second one too, definitely. Short. A B");
+        let s = sentence_list(
+            "First sentence is long enough here. Second one too, definitely. Short. A B",
+        );
         assert_eq!(s.len(), 2);
     }
 

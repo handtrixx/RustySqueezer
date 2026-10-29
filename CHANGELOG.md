@@ -2,6 +2,31 @@
 
 All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
 
+## v1.0.3 - 2026-10-29
+Reliability pass driven by a real Zed compaction transcript
+(`eval/real_thread.py --transcript test.md`):
+- **Tool results feed the key-point pool.** Raw tool output is the ground
+  truth of a real thread (build logs, health checks, eval numbers), but its
+  lines are rarely grammatical sentences. Fact-signal lines (versions, IPs,
+  token counts, `healthy`/`PASS`/`FAIL`, exit codes) are now extracted at a
+  lower weight than assistant prose.
+- **Near-duplicate key points filtered out.** Paraphrases of the same fact
+  (three commit-log lines, repeated "surfaces PASS") no longer squeeze out
+  distinct facts; a candidate is skipped when >=75 % of its content tokens are
+  already covered by an accepted point.
+- **Sections keep fitting line by line** instead of stopping at the first
+  overlong line, so one verbose sentence cannot block several shorter ones.
+- **Budgets rebalanced**: `key_points` share raised (10 -> 40 relative), tail
+  reduced (50 -> 30) since it is already capped by `tail_chars`.
+- **Tighter detection**: error pattern requires real failure context (no more
+  "great error messages" or a quoted `timeout: 5s` reported as an error); file
+  regex requires a word boundary so domains like `github.com` are not mistaken
+  for `github.c`.
+- New `eval/real_thread.py`: parses a real transcript into the exact message
+  shape Zed sends (assistant `tool_calls` + `tool` results), checks needle
+  recall, determinism, budget compliance, tail preservation and surface parity.
+  Result on the real thread: 22k -> 2.9k tokens (13 %), 23/25 needles, PASS.
+
 ## v1.0.2 - 2026-10-29
 - **Anthropic Messages surface** (`POST /v1/messages`): accepts the top-level
   `system` string and content-block messages, responds in Anthropic message

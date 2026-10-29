@@ -13,8 +13,35 @@ pub fn stop_words() -> std::collections::HashSet<String> {
         .collect()
 }
 
-static TOKEN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[A-Za-z0-9_./-]{3,}").unwrap());
+static TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z0-9_./-]{3,}").unwrap());
+
+// Hard facts an agent needs after compaction: IPs, versions, counts, status
+// words. Tool output lines are rarely grammatical sentences, so these signal
+// tokens are what makes a raw log line worth keeping.
+static SALIENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)(?:\d{1,3}\.){3}\d{1,3}|\d+\.\d+\.\d+|\b\d+[km]\b|\b\d+\b\s*(?:tokens|chars|tests|MB|bytes|tags?|files)|tests? (?:passed|ok)|healthy|unhealthy|\bPASS\b|\bFAIL\b|exit code|status: ok|ghcr\.io|tagged|version|healthcheck|--health|/api/\w+",
+    )
+    .unwrap()
+});
+
+/// True if a line carries a concrete fact (number, version, IP, status word).
+pub fn has_fact_signal(s: &str) -> bool {
+    SALIENT_RE.is_match(s)
+}
+
+/// Lines from tool output that carry hard facts even when they are not
+/// grammatical sentences (e.g. `Status: healthy`, `189 -> 1284 tokens`).
+pub fn salient_lines(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if (8..=320).contains(&line.chars().count()) && has_fact_signal(line) {
+            out.push(line.to_string());
+        }
+    }
+    out
+}
 
 /// Deterministic word-boundary token count:
 /// each run of ASCII alphanumerics/apostrophes is one token, every other
@@ -67,7 +94,8 @@ pub fn msg_text(msg: &Value) -> String {
 }
 
 pub fn is_compaction_instruction(text: &str, cfg: &crate::config::Config) -> bool {
-    cfg.compact_re.is_match(&text.to_lowercase()) && text.chars().count() < cfg.instruction_max_chars
+    cfg.compact_re.is_match(&text.to_lowercase())
+        && text.chars().count() < cfg.instruction_max_chars
 }
 
 /// Split on newlines, then on sentence ends; keep order.
@@ -82,7 +110,9 @@ pub fn sentence_list(text: &str) -> Vec<String> {
         }
         for s in split_sentences(line) {
             let s = s.trim();
-            if s.chars().count() >= 20 {
+            // Short fragments normally mean boilerplate, but a line like
+            // `healthcheck:` or `POST /api/chat` is pure fact and must stay.
+            if s.chars().count() >= 20 || has_fact_signal(s) {
                 out.push(s.to_string());
             }
         }
@@ -135,7 +165,10 @@ pub fn term_counts(text: &str) -> std::collections::HashMap<String, usize> {
 }
 
 pub fn file_matches(text: &str, cfg: &crate::config::Config) -> Vec<String> {
-    cfg.file_re.find_iter(text).map(|m| m.as_str().to_string()).collect()
+    cfg.file_re
+        .find_iter(text)
+        .map(|m| m.as_str().to_string())
+        .collect()
 }
 
 pub fn has_error(text: &str, cfg: &crate::config::Config) -> bool {
@@ -169,27 +202,19 @@ pub fn dedup_keep_order(items: &[String], cap: usize) -> Vec<String> {
     out
 }
 
-
 /// Sentences that are identical after normalisation (case, whitespace and
 /// trailing punctuation) are collapsed to their first occurrence. Repeated
 /// tool chatter ("Routine probing..." x 20) would otherwise eat the
 /// key-points budget several times over. Deterministic.
-fn normalize(s: &str) -> String {
-    let joined = s.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+pub fn normalize(s: &str) -> String {
+    let joined = s
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     joined
         .trim_end_matches(|c: char| !c.is_alphanumeric())
         .to_string()
-}
-
-pub fn dedup_normalized(items: &[String]) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for item in items {
-        if seen.insert(normalize(item)) {
-            out.push(item.clone());
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -197,18 +222,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalized_dedup_collapses_repeats() {
-        let v = vec![
-            "Routine probing and reading output.".to_string(),
-            "routine probing and reading output!".to_string(),
-            "Real finding: the probe listens on 8003.".to_string(),
-        ];
+    fn salient_lines_keeps_fact_lines_only() {
+        let out = salient_lines(
+            "Routine probing done.\nStatus: healthy, 189 tests passed\n# a comment\n\
+             rustysqueezer 172.19.0.20 up 2 minutes\nbuilt ghcr.io/handtrixx/rustysqueezer:1.0.3 (2.9 MB)\n",
+        );
+        assert!(out.iter().any(|l| l.contains("172.19.0.20")));
+        assert!(out.iter().any(|l| l.contains("189 tests passed")));
+        assert!(out.iter().any(|l| l.contains("ghcr.io")));
+        assert!(!out.iter().any(|l| l == "Routine probing done."));
+        assert!(!out.iter().any(|l| l == "# a comment"));
+    }
+
+    #[test]
+    fn normalize_collapses_case_and_punctuation() {
         assert_eq!(
-            dedup_normalized(&v),
-            vec![
-                "Routine probing and reading output.".to_string(),
-                "Real finding: the probe listens on 8003.".to_string()
-            ]
+            normalize("Routine probing and reading output."),
+            normalize("routine probing and reading output!")
+        );
+        assert_eq!(
+            normalize("Real finding: the probe listens on 8003."),
+            "real finding: the probe listens on 8003"
         );
     }
 

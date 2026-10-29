@@ -11,7 +11,7 @@
     "summariz|summarise|compact|condense|conversation so far|context window"
   ],
   "instruction_max_chars": 4000,
-  "error_pattern": "(?:^|\\s)(?:error|errors|failed|fails|exception|traceback|denied|exit code|cannot|unable|not found|timeout)",
+  "error_pattern": "error[:\\)]|errors? (?:occurred|during|on|in )|failed to|failed with|failed \\(exit|exit code \\d|traceback|exception|connection refused|permission denied|unable to|not found|no such file|timed out|status: failed|fatal|command not found",
   "file_extensions": [
     "py", "rs", "ts", "tsx", "js", "jsx", "json", "ya?ml", "toml", "md",
     "sh", "bash", "html", "css", "sql", "txt", "log", "lock", "go", "cpp", "c", "h", "Dockerfile"
@@ -21,14 +21,14 @@
     "errors", "key_points", "tail"
   ],
   "section_budgets": {
-    "tail": 50,
+    "tail": 30,
     "commands": 12,
     "followups": 10,
-    "key_points": 10,
+    "key_points": 40,
     "errors": 8,
-    "files": 8,
+    "files": 10,
     "original_task": 6,
-    "tools": 4
+    "tools": 5
   },
   "section_titles": {
     "header": "Conversation summary (deterministic compaction by rustysqueezer)",

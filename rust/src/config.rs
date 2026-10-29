@@ -6,11 +6,34 @@ use serde_json::Value;
 
 const DEFAULT_COMPACT_PATTERN: &str =
     "summariz|summarise|compact|condense|conversation so far|context window";
-const DEFAULT_ERROR_PATTERN: &str =
-    r"(?:^|\s)(?:error|errors|failed|fails|exception|traceback|denied|exit code|cannot|unable|not found|timeout)";
+// A bare "error"/"cannot" also occurs in ordinary prose ("great error messages",
+// a quoted `timeout: 5s`), which filled the errors section with noise on real
+// threads. Require an actual failure context.
+const DEFAULT_ERROR_PATTERN: &str = r"error[:\)]|errors? (?:occurred|during|on|in )|failed to|failed with|failed \(exit|exit code \d|traceback|exception|connection refused|permission denied|unable to|not found|no such file|timed out|status: failed|fatal|command not found";
 const DEFAULT_FILE_EXTENSIONS: &[&str] = &[
-    "py", "rs", "ts", "tsx", "js", "jsx", "json", "ya?ml", "toml", "md", "sh", "bash", "html",
-    "css", "sql", "txt", "log", "lock", "go", "cpp", "c", "h", "Dockerfile",
+    "py",
+    "rs",
+    "ts",
+    "tsx",
+    "js",
+    "jsx",
+    "json",
+    "ya?ml",
+    "toml",
+    "md",
+    "sh",
+    "bash",
+    "html",
+    "css",
+    "sql",
+    "txt",
+    "log",
+    "lock",
+    "go",
+    "cpp",
+    "c",
+    "h",
+    "Dockerfile",
 ];
 
 #[derive(Debug, Clone)]
@@ -46,29 +69,51 @@ fn env_int(name: &str, default: i64) -> usize {
 
 fn default_titles() -> HashMap<String, String> {
     let mut t = HashMap::new();
-    t.insert("header".to_string(), "Conversation summary (deterministic compaction by rustysqueezer)".to_string());
-    t.insert("note".to_string(), "(Compaction requested by the agent harness; the task below is the original request.)".to_string());
+    t.insert(
+        "header".to_string(),
+        "Conversation summary (deterministic compaction by rustysqueezer)".to_string(),
+    );
+    t.insert(
+        "note".to_string(),
+        "(Compaction requested by the agent harness; the task below is the original request.)"
+            .to_string(),
+    );
     t.insert("original_task".to_string(), "Original task".to_string());
-    t.insert("followups".to_string(), "Follow-up user messages".to_string());
-    t.insert("commands".to_string(), "Commands run (most recent first)".to_string());
+    t.insert(
+        "followups".to_string(),
+        "Follow-up user messages".to_string(),
+    );
+    t.insert(
+        "commands".to_string(),
+        "Commands run (most recent first)".to_string(),
+    );
     t.insert("files".to_string(), "Files/paths involved".to_string());
     t.insert("tools".to_string(), "Tools used".to_string());
     t.insert("errors".to_string(), "Errors / problems seen".to_string());
-    t.insert("key_points".to_string(), "Key points from the assistant".to_string());
-    t.insert("tail".to_string(), "Most recent turns (verbatim, clipped)".to_string());
+    t.insert(
+        "key_points".to_string(),
+        "Key points from the assistant".to_string(),
+    );
+    t.insert(
+        "tail".to_string(),
+        "Most recent turns (verbatim, clipped)".to_string(),
+    );
     t
 }
 
 fn default_budgets() -> HashMap<String, usize> {
+    // Shares are relative, so only the ratios matter. The tail is already
+    // hard-capped by tail_chars per turn, giving it a 50 % share wasted headroom
+    // while the key-points section - the actual recall surface - starved.
     let mut b = HashMap::new();
-    b.insert("tail".to_string(), 50);
+    b.insert("tail".to_string(), 30);
     b.insert("commands".to_string(), 12);
     b.insert("followups".to_string(), 10);
-    b.insert("key_points".to_string(), 10);
+    b.insert("key_points".to_string(), 40);
     b.insert("errors".to_string(), 8);
-    b.insert("files".to_string(), 8);
+    b.insert("files".to_string(), 10);
     b.insert("original_task".to_string(), 6);
-    b.insert("tools".to_string(), 4);
+    b.insert("tools".to_string(), 5);
     b
 }
 
@@ -86,8 +131,10 @@ fn defaults() -> Config {
         compact_re: Regex::new(DEFAULT_COMPACT_PATTERN).unwrap(),
         // Error detection is case-insensitive.
         error_re: Regex::new(&format!("(?i){}", DEFAULT_ERROR_PATTERN)).unwrap(),
+        // `\b` after the extension prevents domains from matching: without it
+        // "github.com" matches the `c` extension and yields "github.c".
         file_re: Regex::new(&format!(
-            r"[\w./-]+\.({})",
+            r"[\w./-]+\.({})\b",
             DEFAULT_FILE_EXTENSIONS.join("|")
         ))
         .unwrap(),
@@ -238,9 +285,24 @@ mod tests {
     #[test]
     fn defaults_match_config_example() {
         let cfg = defaults();
-        assert!(cfg.compact_re.is_match("please summarize the conversation so far"));
+        assert!(cfg
+            .compact_re
+            .is_match("please summarize the conversation so far"));
         assert!(cfg.error_re.is_match("Error: connection refused"));
+        assert!(cfg.error_re.is_match("HTTP Error 404: Not Found"));
+        assert!(cfg.error_re.is_match("exit code 1"));
+        // Prose and quoted config must not be reported as errors.
+        assert!(!cfg.error_re.is_match("Rust has great error messages"));
+        assert!(!cfg.error_re.is_match("timeout: 5s"));
+        assert!(!cfg
+            .error_re
+            .is_match("the old bug where the tail got chopped"));
         assert!(cfg.file_re.is_match("compose.yml"));
+        // Domains must not be mistaken for files ("github.com" -> "github.c").
+        assert!(!cfg
+            .file_re
+            .is_match("https://github.com/handtrixx/RustySqueezer"));
+        assert!(cfg.file_re.is_match("docs/index.html"));
         assert_eq!(cfg.title("key_points"), "Key points from the assistant");
         assert_eq!(cfg.sections.len(), 8);
     }
