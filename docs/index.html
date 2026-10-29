@@ -1,308 +1,286 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RustySqueezer - deterministic context compaction without a model</title>
   <meta name="description" content="RustySqueezer is a fake LLM for context compaction: an OpenAI, Anthropic and Ollama compatible endpoint that produces deterministic, extractive summaries of agent threads without calling any language model.">
   <link rel="icon" type="image/png" href="rustysqueezer.png">
-  <link href="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.css" rel="stylesheet">
-  <script type="module" src="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.js"></script>
-  <script type="module" src="https://cdn.jsdelivr.net/npm/material-dynamic-colors@1.1.4/dist/cdn/material-dynamic-colors.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <style>
-    /* Teal primary palette (Material Design 3 tones), used as fallback if
-       the dynamic theme script is unavailable. */
-    :root, body.light {
-      --primary: #006d5b; --on-primary: #ffffff;
-      --primary-container: #c8e7dd; --on-primary-container: #002019;
-      --secondary: #4a6359; --on-secondary: #ffffff;
-      --tertiary: #6a5d76; --on-tertiary: #ffffff;
-      --background: #f6fbf8; --on-background: #19211d;
-      --surface: #f6fbf8; --on-surface: #19211d;
-      --surface-container-low: #e9efea; --surface-container: #e4ece7;
-      --surface-container-high: #d9e1db; --on-surface-variant: #45504b;
+    /* Teal Material-Design-3 style theme: override daisyUI's built-in
+       light/dark palettes (daisyUI inherits the rest of each theme). */
+    [data-theme="light"] {
+      --color-primary: #006d5b;
+      --color-primary-content: #ffffff;
+      --color-secondary: #4a6359;
+      --color-secondary-content: #ffffff;
+      --color-accent: #6a5d76;
+      --color-neutral: #333936;
+      --color-base-100: #f6fbf8;
+      --color-base-200: #e6ede8;
+      --color-base-300: #d5e0da;
+      --color-base-content: #19211d;
+      --radius: 1rem;
     }
-    body.dark {
-      --primary: #6cc9b4; --on-primary: #00382e;
-      --primary-container: #005041; --on-primary-container: #b3e3d1;
-      --secondary: #9fcbbb; --on-secondary: #1f3a30;
-      --tertiary: #c2b3d0; --on-tertiary: #3a2c49;
-      --background: #191e1b; --on-background: #dce5e1;
-      --surface: #111613; --on-surface: #dce5e1;
-      --surface-container-low: #161b18; --surface-container: #1b211e;
-      --surface-container-high: #212724; --on-surface-variant: #9fa8a3;
+    [data-theme="dark"] {
+      --color-primary: #6cc9b4;
+      --color-primary-content: #00382e;
+      --color-secondary: #9fcbbb;
+      --color-secondary-content: #1f3a30;
+      --color-accent: #c2b3d0;
+      --color-neutral: #c9d2cd;
+      --color-base-100: #111613;
+      --color-base-200: #1b211e;
+      --color-base-300: #262d29;
+      --color-base-content: #dce5e1;
+      --radius: 1rem;
     }
+    pre {
+      background: var(--color-base-200);
+      border: 1px solid var(--color-base-300);
+      border-radius: var(--radius);
+      padding: 1rem;
+      overflow-x: auto;
+      font-size: 0.875rem;
+    }
+    code {
+      background: var(--color-base-200);
+      border-radius: 0.375rem;
+      padding: 0.15rem 0.4rem;
+      font-size: 0.875rem;
+    }
+    pre code { background: none; padding: 0; }
   </style>
 </head>
-<body class="dark">
-<script type="module">
-  // Generate the full MD3 palette from teal; falls back to the CSS above.
-  if (typeof ui === "function") {
-    try {
-      ui("theme", "#00897b");
-      ui("mode", "auto"); // follow the OS light/dark preference
-    } catch (e) {}
-  }
-  document.querySelector("button.mode-toggle")?.addEventListener("click", () => {
-    document.body.classList.toggle("dark");
-  });
-</script>
+<body class="min-h-screen bg-base-100 text-base-content">
 
-<nav class="top">
-  <img src="rustysqueezer.png" class="circle" width="40" height="40" alt="RustySqueezer logo">
-  <h6>RustySqueezer</h6>
-  <div class="max"></div>
-  <nav>
-    <a class="button border round" href="https://github.com/handtrixx/RustySqueezer"><i>code</i><span>GitHub</span></a>
-    <a class="button border round" href="https://github.com/handtrixx/RustySqueezer/blob/main/README.md"><i>book</i><span>README</span></a>
-    <a class="button border round" href="https://github.com/handtrixx/RustySqueezer/actions/workflows/build-image.yml"><i>activity</i><span>Build status</span></a>
-    <a class="button border round" href="https://ghcr.io/handtrixx/rustysqueezer"><i>download</i><span>Image</span></a>
-  </nav>
-  <button class="circle border mode-toggle" aria-label="Toggle dark mode"><i>mode</i></button>
-</nav>
-
-<main>
-  <!-- Hero, same shape as beercss.com/material-design-3 -->
-  <div class="grid">
-    <div class="s12 m6 l6">
-      <div class="page bottom active">
-        <article class="round no-elevate large-padding middle-align">
-          <div class="large-padding">
-            <h1 class="large">RustySqueezer</h1>
-            <h2 class="h6">A fake LLM for context compaction: deterministic, extractive thread summaries with no language model involved. Speaks OpenAI, Anthropic and Ollama.</h2>
-            <nav>
-              <a class="button" href="https://github.com/handtrixx/RustySqueezer"><i>code</i><span>Get the source</span></a>
-              <a class="button border" href="https://ghcr.io/handtrixx/rustysqueezer"><i>download</i><span>Pull the image</span></a>
-            </nav>
-          </div>
-        </article>
-      </div>
+  <div class="navbar base-200 border-b border-base-300 sticky top-0 z-10">
+    <div class="navbar-start">
+      <a href="https://github.com/handtrixx/RustySqueezer" class="flex items-center gap-3">
+        <img src="rustysqueezer.png" alt="RustySqueezer logo" class="w-9 h-9 rounded-full">
+        <span class="font-bold">RustySqueezer</span>
+      </a>
     </div>
-    <div class="s12 m6 l6">
-      <div class="page top active">
-        <div class="round no-padding">
-          <img class="responsive" src="rustysqueezer.png" alt="RustySqueezer logo">
-        </div>
-      </div>
+    <div class="navbar-end flex-wrap gap-2">
+      <a href="https://github.com/handtrixx/RustySqueezer" class="btn btn-ghost btn-sm">GitHub</a>
+      <a href="https://github.com/handtrixx/RustySqueezer/blob/main/README.md" class="btn btn-ghost btn-sm">README</a>
+      <a href="https://github.com/handtrixx/RustySqueezer/actions/workflows/build-image.yml" class="btn btn-ghost btn-sm">Build status</a>
+      <a href="https://ghcr.io/handtrixx/rustysqueezer" class="btn btn-ghost btn-sm">Image</a>
+      <button class="btn btn-ghost btn-sm btn-circle" id="mode-toggle" aria-label="Toggle dark mode">
+        <svg id="mode-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
     </div>
   </div>
 
-  <div class="large-space"></div>
-  <div class="large-space"></div>
+  <main class="max-w-5xl mx-auto px-4 pb-16">
 
-  <section class="responsive">
-    <h2>Why it exists</h2>
-    <h3 class="h6">Compaction does not need a model - it needs a good extractive summary.</h3>
-    <p>Agents compact long threads by sending the whole thread to a summarising model. That request must fit inside the summariser's context window, so a local model with a modest window (e.g. 131k tokens) cannot compact its own threads, and you end up paying a 1M-context cloud model for every compaction event.</p>
-    <p>The insight: <strong>compaction does not need a model.</strong> It needs a good extractive summary of what was asked, what was run, what broke, and what was just said. RustySqueezer does exactly that, in a few milliseconds, for free, and always produces byte-identical output for the same input (which keeps prefix caches warm).</p>
-    <div class="large-space"></div>
-    <div class="grid">
-      <div class="s12 m6 l4">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">No model calls</h3>
-          <p>Pure Rust, deterministic extraction: task, commands, errors, files, key points and a verbatim tail.</p>
-        </article>
+    <!-- Hero -->
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body p-8">
+          <h1 class="card-title text-3xl font-semibold">RustySqueezer</h1>
+          <p class="text-base-content/70 mt-2">A fake LLM for context compaction: deterministic, extractive thread summaries with no language model involved. Speaks OpenAI, Anthropic and Ollama.</p>
+          <div class="mt-5 flex gap-3 flex-wrap">
+            <a href="https://github.com/handtrixx/RustySqueezer" class="btn btn-primary">Get the source</a>
+            <a href="https://ghcr.io/handtrixx/rustysqueezer" class="btn btn-outline">Pull the image</a>
+          </div>
+        </div>
       </div>
-      <div class="s12 m6 l4">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">Drop-in surfaces</h3>
-          <p>OpenAI <code>/v1/chat/completions</code>, Anthropic <code>/v1/messages</code> and Ollama <code>/api/chat</code> - byte-identical summaries on all three.</p>
-        </article>
+      <div class="card rounded-2xl box-shadow">
+        <figure><img src="rustysqueezer.png" alt="RustySqueezer logo" class="w-full rounded-2xl"></figure>
       </div>
-      <div class="s12 m6 l4">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">Tiny and hard</h3>
-          <p>Static musl binary on <code>scratch</code> (~3 MB), non-root, shell-free healthcheck.</p>
-        </article>
+    </section>
+
+    <h2 class="text-2xl font-semibold mt-12">Why it exists</h2>
+    <p class="text-base-content/60 mt-1">Compaction does not need a model - it needs a good extractive summary.</p>
+    <p class="mt-4">Agents compact long threads by sending the whole thread to a summarising model. That request must fit inside the summariser's context window, so a local model with a modest window (e.g. 131k tokens) cannot compact its own threads, and you end up paying a 1M-context cloud model for every compaction event.</p>
+    <p class="mt-3">The insight: <strong>compaction does not need a model.</strong> It needs a good extractive summary of what was asked, what was run, what broke, and what was just said. RustySqueezer does exactly that, in a few milliseconds, for free, and always produces byte-identical output for the same input (which keeps prefix caches warm).</p>
+
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">No model calls</h3>
+          <p class="text-base-content/70">Pure Rust, deterministic extraction: task, commands, errors, files, key points and a verbatim tail.</p>
+        </div>
+      </div>
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">Drop-in surfaces</h3>
+          <p class="text-base-content/70">OpenAI <code>/v1/chat/completions</code>, Anthropic <code>/v1/messages</code> and Ollama <code>/api/chat</code> - byte-identical summaries on all three.</p>
+        </div>
+      </div>
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">Tiny and hard</h3>
+          <p class="text-base-content/70">Static musl binary on <code>scratch</code> (~3 MB), non-root, shell-free healthcheck.</p>
+        </div>
       </div>
     </div>
-  </section>
 
-  <div class="large-space"></div>
-  <div class="large-space"></div>
-
-  <section class="responsive">
-    <h2>How it works</h2>
-    <h3 class="h6">Compaction-pattern detection, thread parsing, TF-IDF scoring and per-section budgets.</h3>
-    <div class="large-space"></div>
-    <div class="grid">
-      <div class="s12 m6 l6">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">Pipeline</h3>
-          <ol>
+    <h2 class="text-2xl font-semibold mt-12">How it works</h2>
+    <p class="text-base-content/60 mt-1">Compaction-pattern detection, thread parsing, TF-IDF scoring and per-section budgets.</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">Pipeline</h3>
+          <ol class="list-decimal pl-5 mt-2 space-y-2 text-sm">
             <li>Detect the compaction request: if the last user message matches known compaction instruction patterns (Zed, Claude Code-style, generic "summarize the conversation so far"), it is treated as an instruction and removed from the thread.</li>
             <li>Split the thread into the original task, follow-up user messages, shell commands actually run, file paths touched, error lines, and the most recent verbatim tail of turns.</li>
             <li>Score assistant sentences with a TF-IDF-ish term-importance heuristic and keep the highest-scoring key points.</li>
             <li>Apply per-section budgets: every section gets its own slice of <code>MAX_SUMMARY_CHARS</code>; the verbatim tail gets the largest share (50%), so long threads never lose their tail.</li>
           </ol>
-        </article>
+        </div>
       </div>
-      <div class="s12 m6 l6">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">Sections and budgets</h3>
-          <table>
-            <tr><th>Section</th><th>Share</th><th>Contents</th></tr>
-            <tr><td>tail</td><td>50 %</td><td>most recent turns, verbatim</td></tr>
-            <tr><td>commands</td><td>12 %</td><td>shell commands run, most recent first</td></tr>
-            <tr><td>followups</td><td>10 %</td><td>later user messages</td></tr>
-            <tr><td>key_points</td><td>10 %</td><td>highest-scoring assistant sentences</td></tr>
-            <tr><td>errors</td><td>8 %</td><td>error/failure lines</td></tr>
-            <tr><td>files</td><td>8 %</td><td>file paths mentioned by tools</td></tr>
-            <tr><td>original_task</td><td>6 %</td><td>first user message</td></tr>
-            <tr><td>tools</td><td>4 %</td><td>distinct tool names</td></tr>
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">Sections and budgets</h3>
+          <table class="table table-sm mt-2">
+            <thead><tr><th>Section</th><th>Share</th><th>Contents</th></tr></thead>
+            <tbody>
+              <tr><td>tail</td><td>50 %</td><td>most recent turns, verbatim</td></tr>
+              <tr><td>commands</td><td>12 %</td><td>shell commands run, most recent first</td></tr>
+              <tr><td>followups</td><td>10 %</td><td>later user messages</td></tr>
+              <tr><td>key_points</td><td>10 %</td><td>highest-scoring assistant sentences</td></tr>
+              <tr><td>errors</td><td>8 %</td><td>error/failure lines</td></tr>
+              <tr><td>files</td><td>8 %</td><td>file paths mentioned by tools</td></tr>
+              <tr><td>original_task</td><td>6 %</td><td>first user message</td></tr>
+              <tr><td>tools</td><td>4 %</td><td>distinct tool names</td></tr>
+            </tbody>
           </table>
-        </article>
+        </div>
       </div>
     </div>
-  </section>
 
-  <div class="large-space"></div>
-  <div class="large-space"></div>
-
-  <section class="responsive">
-    <h2>API</h2>
-    <h3 class="h6">One deterministic endpoint per surface - no keys, no model, no network.</h3>
-    <div class="large-space"></div>
-    <div class="grid">
-      <div class="s12 l6">
-        <article class="round no-elevate large-padding wave">
-          <table>
-            <tr><th>Method</th><th>Path</th><th>Behaviour</th></tr>
-            <tr><td>GET</td><td>/health</td><td>health check with model id</td></tr>
-            <tr><td>GET</td><td>/v1/models</td><td>single model id (MODEL_NAME)</td></tr>
-            <tr><td>POST</td><td>/v1/chat/completions</td><td>OpenAI-compatible; summary of the thread it was given</td></tr>
-            <tr><td>POST</td><td>/v1/messages</td><td>Anthropic Messages API, streaming included</td></tr>
-            <tr><td>POST</td><td>/api/chat</td><td>Ollama native chat, NDJSON streaming included</td></tr>
-            <tr><td>POST</td><td>/api/generate</td><td>Ollama completion over a raw prompt string</td></tr>
-            <tr><td>GET</td><td>/api/tags</td><td>Ollama model discovery</td></tr>
+    <h2 class="text-2xl font-semibold mt-12">API</h2>
+    <p class="text-base-content/60 mt-1">One deterministic endpoint per surface - no keys, no model, no network.</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <table class="table table-sm">
+            <thead><tr><th>Method</th><th>Path</th><th>Behaviour</th></tr></thead>
+            <tbody>
+              <tr><td>GET</td><td>/health</td><td>health check with model id</td></tr>
+              <tr><td>GET</td><td>/v1/models</td><td>single model id (MODEL_NAME)</td></tr>
+              <tr><td>POST</td><td>/v1/chat/completions</td><td>OpenAI-compatible; summary of the thread it was given</td></tr>
+              <tr><td>POST</td><td>/v1/messages</td><td>Anthropic Messages API, streaming included</td></tr>
+              <tr><td>POST</td><td>/api/chat</td><td>Ollama native chat, NDJSON streaming included</td></tr>
+              <tr><td>POST</td><td>/api/generate</td><td>Ollama completion over a raw prompt string</td></tr>
+              <tr><td>GET</td><td>/api/tags</td><td>Ollama model discovery</td></tr>
+            </tbody>
           </table>
-        </article>
+        </div>
       </div>
-      <div class="s12 l6">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">Try it</h3>
-          <pre>curl -s localhost:8000/v1/chat/completions -H 'content-type: application/json' -d '{"model":"rustysqueezer","messages":[{"role":"user","content":"Fix the nginx upstream timeout in docker/traefik"},{"role":"assistant","content":"I ran docker compose up -d; failed exit code 1."},{"role":"user","content":"Please summarize conversation so far"}]}'</pre>
-          <p>The usage field reports token counts from the deterministic tokenizer, so completion_tokens / prompt_tokens is the real compression ratio.</p>
-        </article>
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">Try it</h3>
+          <pre class="mt-2">curl -s localhost:8000/v1/chat/completions -H 'content-type: application/json' -d '{"model":"rustysqueezer","messages":[{"role":"user","content":"Fix the nginx upstream timeout in docker/traefik"},{"role":"assistant","content":"I ran docker compose up -d; failed exit code 1."},{"role":"user","content":"Please summarize conversation so far"}]}'</pre>
+          <p class="text-sm mt-3 text-base-content/70">The usage field reports token counts from the deterministic tokenizer, so completion_tokens / prompt_tokens is the real compression ratio.</p>
+        </div>
       </div>
     </div>
-  </section>
 
-  <div class="large-space"></div>
-  <div class="large-space"></div>
-
-  <section class="responsive">
-    <h2>Quick start</h2>
-    <div class="grid">
-      <div class="s12 l6">
-        <article class="round no-elevate large-padding wave">
+    <h2 class="text-2xl font-semibold mt-12">Quick start</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
           <pre>cd rust
 cargo run   # or: docker compose up -d
 curl -s localhost:8000/health
 curl -s localhost:8000/api/tags</pre>
-        </article>
+        </div>
       </div>
-      <div class="s12 l6">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">Configuration</h3>
-          <p>Configuration is two layers, both optional: environment variables (see <code>.env.example</code>) and a JSON config file (<code>CONFIG_PATH</code>, see <code>config.example.json</code>) for detection rules, sections, titles and budgets. Env vars still win over the file.</p>
-        </article>
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">Configuration</h3>
+          <p class="text-sm mt-2 text-base-content/70">Configuration is two layers, both optional: environment variables (see <code>.env.example</code>) and a JSON config file (<code>CONFIG_PATH</code>, see <code>config.example.json</code>) for detection rules, sections, titles and budgets. Env vars still win over the file.</p>
+        </div>
       </div>
     </div>
-  </section>
 
-  <div class="large-space"></div>
-  <div class="large-space"></div>
-
-  <section class="responsive">
-    <h2>Evaluation</h2>
-    <div class="grid">
-      <div class="s12 l6">
-        <article class="round no-elevate large-padding wave">
-          <p><code>eval/eval.py</code> replays synthetic threads with known needles - facts that must survive compaction - and reports recall, compression ratio, determinism and budget compliance (a ~190k-token scenario included). <code>eval/surfaces.py</code> checks that the Anthropic and Ollama surfaces return exactly the same summaries as the OpenAI one. Both run in CI and fail the build on regressions.</p>
-        </article>
+    <h2 class="text-2xl font-semibold mt-12">Evaluation</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <p class="text-sm"><code>eval/eval.py</code> replays synthetic threads with known needles - facts that must survive compaction - and reports recall, compression ratio, determinism and budget compliance (a ~190k-token scenario included). <code>eval/surfaces.py</code> checks that the Anthropic and Ollama surfaces return exactly the same summaries as the OpenAI one. Both run in CI and fail the build on regressions.</p>
+        </div>
       </div>
-      <div class="s12 l6">
-        <article class="round no-elevate large-padding wave">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
           <pre>python3 eval/eval.py --url http://localhost:8000/v1
 python3 eval/surfaces.py --url http://localhost:8000</pre>
-        </article>
+        </div>
       </div>
     </div>
-  </section>
 
-  <div class="large-space"></div>
-  <div class="large-space"></div>
-
-  <section class="responsive">
-    <h2>Deployment</h2>
-    <div class="grid">
-      <div class="s12 l6">
-        <article class="round no-elevate large-padding wave">
-          <p>CI builds on every push to main and publishes to GitHub Container Registry with automatic version tags (<code>:latest</code>, <code>:&lt;sha&gt;</code>, <code>:1.0.3</code>, <code>:v1.0.3</code>) plus a matching git tag. The image is public - no login needed.</p>
-        </article>
+    <h2 class="text-2xl font-semibold mt-12">Deployment</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <p class="text-sm">CI builds on every push to main and publishes to GitHub Container Registry with automatic version tags (<code>:latest</code>, <code>:&lt;sha&gt;</code>, <code>:1.0.3</code>, <code>:v1.0.3</code>) plus a matching git tag. The image is public - no login needed.</p>
+        </div>
       </div>
-      <div class="s12 l6">
-        <article class="round no-elevate large-padding wave">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
           <pre>docker run -d -p 8000:8000 -e MAX_SUMMARY_CHARS=12000 ghcr.io/handtrixx/rustysqueezer:1.0.3</pre>
-        </article>
+        </div>
       </div>
     </div>
-  </section>
 
-  <div class="large-space"></div>
-  <div class="large-space"></div>
-
-  <section class="responsive">
-    <h2>Wiring into an agent</h2>
-    <div class="large-space"></div>
-    <div class="grid">
-      <div class="s12 m6 l4">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">Zed</h3>
-          <p>Declare the endpoint as an OpenAI-compatible model with a large context window in settings.json, then point agent.compaction_model at it.</p>
-        </article>
+    <h2 class="text-2xl font-semibold mt-12">Wiring into an agent</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">Zed</h3>
+          <p class="text-sm text-base-content/70">Declare the endpoint as an OpenAI-compatible model with a large context window in settings.json, then point agent.compaction_model at it.</p>
+        </div>
       </div>
-      <div class="s12 m6 l4">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">LiteLLM</h3>
-          <p>Add an openai/rustysqueezer entry pointing at http://localhost:8000/v1 with a large max_tokens.</p>
-        </article>
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">LiteLLM</h3>
+          <p class="text-sm text-base-content/70">Add an openai/rustysqueezer entry pointing at http://localhost:8000/v1 with a large max_tokens.</p>
+        </div>
       </div>
-      <div class="s12 m6 l4">
-        <article class="round no-elevate large-padding wave">
-          <h3 class="h6">Anything else</h3>
-          <p>Any harness that picks a summariser via an OpenAI, Anthropic or Ollama chat endpoint can use RustySqueezer as a drop-in.</p>
-        </article>
+      <div class="card bg-base-200 rounded-2xl box-shadow">
+        <div class="card-body">
+          <h3 class="card-title text-lg">Anything else</h3>
+          <p class="text-sm text-base-content/70">Any harness that picks a summariser via an OpenAI, Anthropic or Ollama chat endpoint can use RustySqueezer as a drop-in.</p>
+        </div>
       </div>
     </div>
-  </section>
 
-  <div class="large-space"></div>
-  <div class="large-space"></div>
-
-  <section class="responsive">
-    <h2>Limitations</h2>
-    <div class="grid">
-      <div class="s12 l12">
-        <article class="round no-elevate large-padding wave">
-          <ul>
-            <li>Extractive, not abstractive: nuance is lost in very long, meandering threads.</li>
-            <li>Heuristics are tuned for code-agent traffic; retune via config.json for other harnesses.</li>
-            <li>Token counting is word-boundary based, not exact cl100k BPE.</li>
-            <li>No embeddings, no tool calling, no authentication - run it on a private network.</li>
-          </ul>
-        </article>
+    <h2 class="text-2xl font-semibold mt-12">Limitations</h2>
+    <div class="card bg-base-200 rounded-2xl box-shadow mt-6">
+      <div class="card-body">
+        <ul class="list-disc pl-5 space-y-2 text-sm">
+          <li>Extractive, not abstractive: nuance is lost in very long, meandering threads.</li>
+          <li>Heuristics are tuned for code-agent traffic; retune via config.json for other harnesses.</li>
+          <li>Token counting is word-boundary based, not exact cl100k BPE.</li>
+          <li>No embeddings, no tool calling, no authentication - run it on a private network.</li>
+        </ul>
       </div>
     </div>
-  </section>
 
-  <div class="large-space"></div>
-  <hr>
-  <div class="large-space"></div>
-  <footer class="center-align">
-    <p>MIT licensed - source: <a class="link" href="https://github.com/handtrixx/RustySqueezer">github.com/handtrixx/RustySqueezer</a> - history in CHANGELOG.md</p>
-  </footer>
-</main>
+    <footer class="footer footer-center mt-12 pt-6 border-t border-base-300 text-sm text-base-content/60">
+      <p>MIT licensed - source: <a class="link" href="https://github.com/handtrixx/RustySqueezer">github.com/handtrixx/RustySqueezer</a> - history in CHANGELOG.md</p>
+    </footer>
+  </main>
+
+  <script>
+    const root = document.documentElement;
+    const toggle = document.getElementById("mode-toggle");
+    const icon = document.getElementById("mode-icon");
+    const sun = '<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>';
+    const moon = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+    function setTheme(theme) {
+      root.dataset.theme = theme;
+      icon.innerHTML = theme === "dark" ? sun : moon;
+    }
+    setTheme(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    toggle.addEventListener("click", () => {
+      setTheme(root.dataset.theme === "dark" ? "light" : "dark");
+    });
+  </script>
 </body>
 </html>
