@@ -344,8 +344,8 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         .flat_map(|m| sentence_list(&msg_text(m)))
         .collect();
     let mut key = score_sentences(&all_sents, &task_terms, 2.0, cfg);
-    // Python: sorted(..., reverse=True) on (score, sentence) tuples: score
-    // descending, then lexicographic descending; stable for equal tuples.
+    // Order by score descending, then text descending, so ties are stable
+    // and the output is reproducible.
     key.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
         .then(b.text.cmp(&a.text)));
     key.truncate(cfg.max_key_points);
@@ -444,7 +444,7 @@ mod tests {
         for i in 0..20 {
             msgs.push(json!({
                 "role": "assistant",
-                "content": format!("Step {i}: I will edit app.py section {i} and run tests. Decision: use TF-IDF sentence scoring. The file /data/docker/local-compact/app.py line {} needs the scoring function. Ran `pytest -q` which passed 12 tests. Note: llama.cpp prefix cache requires deterministic output.", i * 13)
+                "content": format!("Step {i}: I will edit summary.rs section {i} and run tests. Decision: use TF-IDF sentence scoring. The file rust/src/summary.rs line {} needs the scoring function. Ran `cargo test` which passed 10 tests. Note: llama.cpp prefix cache requires deterministic output.", i * 13)
             }));
             msgs.push(json!({
                 "role": "tool",
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn sentence_split_matches_python_lookbehind() {
+    fn sentence_splitting_keeps_only_full_sentences() {
         let s = sentence_list("First sentence is long enough here. Second one too, definitely. Short. A B");
         assert_eq!(s.len(), 2);
     }

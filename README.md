@@ -1,10 +1,11 @@
 # local-compact
 
-**Status: proof of concept, with a Rust port.** The `rust/` directory is a
-byte-for-byte port of `app.py` (axum, single binary, parity-tested against the
-Python service); both are deployed-ready and CI-built. Not hardened, no
-production deployment guarantees. Generic configuration (any agent harness),
-deterministic token counting and an evaluation harness landed 2026-10-28.
+**Status: proof of concept.** The service is the Rust binary in `rust/` (axum,
+single binary, CI-built). The original Python PoC (`app.py`) was ported to Rust
+and removed on 2026-10-29 - Rust is the only implementation; Python is left only
+for the stdlib-only evaluation harness in `eval/`. Not hardened, no production
+deployment guarantees. Generic configuration (any agent harness), deterministic
+token counting and an evaluation harness landed 2026-10-28.
 
 `local-compact` is a *fake LLM*: an OpenAI-compatible HTTP endpoint that answers
 context-compaction requests **deterministically**, without calling any language
@@ -63,8 +64,8 @@ Unknown keys are ignored, `section_titles` and `section_budgets` merge partially
 and the `MAX_*` / `TAIL_*` env variables (see below) still override the file.
 `section_budgets` are percent shares of `max_summary_chars`, normalised over the
 sections that are actually enabled (dropping a section hands its budget to the
-rest). Defaults equal the original Zed-tuned behaviour, so parity with previous
-builds is kept.
+rest). Defaults reproduce the original Zed-tuned behaviour, so existing setups
+keep working unchanged.
 
 ```text
 agent ──► local-compact ──► structured summary (~5-10% of the original thread)
@@ -80,7 +81,9 @@ source:
 |---|---|
 | `ghcr.io/handtrixx/local-compact:latest` | Rust binary from `rust/Dockerfile` |
 | `ghcr.io/handtrixx/local-compact:<sha>` | the same, pinned to the commit |
-| `ghcr.io/handtrixx/local-compact:python` | Python PoC from `Dockerfile` |
+
+(The `:python` tag from the pre-port builds is no longer published; it still
+exists in the registry for old pins, but nothing builds it.)
 
 On the homelab host the deploy directory `/data/docker/local-compact` holds only
 `compose.yml`, `.env` and `README.md` - it pulls `ghcr.io/handtrixx/local-compact:latest`
@@ -92,38 +95,20 @@ it is not enabled by default yet.
 ## Quick start
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8000
+cd rust
+cargo run                        # or: docker compose up -d (rust/compose.yml)
 
 curl -s localhost:8000/health
 curl -s localhost:8000/v1/models
 ```
 
-Or with Docker:
+`PORT` is honoured (default 8000).
+
+Checks:
 
 ```bash
-docker compose up -d
-```
-
-### Rust port (`rust/`)
-
-Same behaviour, same environment variables, byte-identical summaries:
-
-```bash
-cd rust
-cargo build --release            # or: docker compose up -d (rust/compose.yml)
-./target/release/local-compact   # listens on :8000, PORT env honoured
-```
-
-Parity check against the Python service (start `app.py` on :8001, the Rust
-binary on :8002, then `./rust/parity_test.sh`).
-
-Smoke test (synthetic ~11k-character thread, checks determinism):
-
-```bash
-python test_thread.py          # against app.py
-cargo test                     # in rust/: determinism + section tests
+cargo test                       # in rust/: determinism, budgeting, section tests
+python3 eval/eval.py --url http://localhost:8000/v1   # stdlib only, no deps
 ```
 
 ## Configuration
@@ -134,9 +119,9 @@ Everything is environment driven (see `.env.example`):
 
 `usage` reports real deterministic token counts, not the old `chars / 4`
 estimate: every run of ASCII alphanumerics/apostrophes is one token and every
-other non-whitespace character counts as one (implemented identically in both
-languages, so Python and Rust agree). It is an approximation, not exact cl100k
-BPE - good enough for budgeting and compression-ratio reporting.
+other non-whitespace character counts as one. The count is deterministic, so
+compression ratios are comparable between runs; it is an approximation, not exact
+cl100k BPE - good enough for budgeting and compression-ratio reporting.
 
 ## Configuration
 
@@ -206,7 +191,7 @@ a regression check before deploying an update.
 
 - Extractive, not abstractive: it can lose nuance in very long, meandering threads.
 - Heuristics (regex for errors, sentence splitting) are tuned for code-agent traffic.
-- Token counting is word-boundary based, not exact cl100k BPE.
+token counting is word-boundary based, not exact cl100k BPE.
 - Only the OpenAI chat-completion shape is implemented (no Anthropic `/messages`, no embeddings).
 
 ## Roadmap
@@ -215,9 +200,9 @@ a regression check before deploying an update.
    cover detection rules, error/file patterns, sections and titles (env vars
    still override). Section *templates* per harness are a possible next step.
 2. ~~Rewrite in Rust~~ - done (`rust/`, axum + serde_json, single binary,
-   ~3.5 MB, parity-tested).
+   ~3.5 MB); the Python PoC was removed 2026-10-29, Rust is the only service.
 3. ~~Real token counting~~ - done 2026-10-28 (deterministic word-boundary
-   tokenizer, identical in Python and Rust; exact cl100k remains out of scope).
+   deterministic word-boundary tokenizer; exact cl100k remains out of scope).
 4. ~~Evaluation harness~~ - done 2026-10-28 (`eval/eval.py`: needle recall,
    compression ratio, determinism against any endpoint). Extended 2026-10-29 with
    a ~130k-token tool-heavy scenario plus ratio and budget assertions, and CI now

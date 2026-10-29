@@ -96,7 +96,7 @@ fn defaults() -> Config {
         assist_max_tokens: 500,
         instruction_max_chars: 4000,
         compact_re: Regex::new(DEFAULT_COMPACT_PATTERN).unwrap(),
-        // Python compiles the error pattern with re.I; mirror that here.
+        // Error detection is case-insensitive.
         error_re: Regex::new(&format!("(?i){}", DEFAULT_ERROR_PATTERN)).unwrap(),
         file_re: Regex::new(&format!(
             r"[\w./-]+\.({})",
@@ -257,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_python_defaults() {
+    fn defaults_match_config_example() {
         let cfg = defaults();
         assert!(cfg.compact_re.is_match("please summarize the conversation so far"));
         assert!(cfg.error_re.is_match("Error: connection refused"));

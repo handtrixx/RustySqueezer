@@ -2,7 +2,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::sync::LazyLock;
 
-/// Stopwords for task-term scoring (mirrors app.py STOP).
+/// Stopwords used by the task-term scoring.
 pub fn stop_words() -> std::collections::HashSet<String> {
     "the an and or to in for on with by been being \
      it that we you i he into about \
@@ -16,7 +16,7 @@ pub fn stop_words() -> std::collections::HashSet<String> {
 static TOKEN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[A-Za-z0-9_./-]{3,}").unwrap());
 
-/// Deterministic word-boundary token count (mirrors app.py count_tokens):
+/// Deterministic word-boundary token count:
 /// each run of ASCII alphanumerics/apostrophes is one token, every other
 /// non-whitespace character (punctuation, non-ASCII) counts as one. Not exact
 /// cl100k BPE, but far closer to real tokenisation than chars/4.
@@ -71,7 +71,7 @@ pub fn is_compaction_instruction(text: &str, cfg: &crate::config::Config) -> boo
 }
 
 /// Split on newlines, then on sentence ends; keep order.
-/// (Python uses a lookbehind split; the regex crate has no lookbehind, so
+/// The regex crate has no lookbehind, so
 /// sentence ends are detected manually.)
 pub fn sentence_list(text: &str) -> Vec<String> {
     let mut out = Vec::new();

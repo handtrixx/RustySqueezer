@@ -1,9 +1,0 @@
-.git
-__pycache__
-*.pyc
-.env
-.venv
-rust/
-test_thread.py
-README.md
-LICENSE

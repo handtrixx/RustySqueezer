@@ -1,5 +1,5 @@
-# Rust port of local-compact (single static-ish binary, negligible startup).
-# Drop-in replacement for the Python PoC compose: same env vars, same port.
+# local-compact service (single Rust binary, negligible startup).
+# Same env vars as .env.example; port 8000.
 services:
   local-compact:
     build: .

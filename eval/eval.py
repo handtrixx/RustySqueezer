@@ -18,7 +18,7 @@ import urllib.request
 
 
 def count_tokens(text):
-    """Mirror the service's deterministic tokenizer (see app.py)."""
+    """Mirror the service's deterministic tokenizer (see rust/src/text.rs)."""
     tokens = 0
     i, n = 0, len(text)
     while i < n:

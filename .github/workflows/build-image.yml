@@ -37,7 +37,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/local-compact:latest
             ghcr.io/${{ github.repository_owner }}/local-compact:${{ github.sha }}
 
-  python:
+  rust:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,6 +51,8 @@ jobs:
           password: ${{ github.token }}
       - uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./rust
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/local-compact:python
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/local-compact:latest
+            ghcr.io/${{ github.repository_owner }}/local-compact:${{ github.sha }}
