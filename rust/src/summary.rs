@@ -439,7 +439,7 @@ mod tests {
         })];
         msgs.push(json!({
             "role": "user",
-            "content": "Build a deterministic fake-LLM compactor service for Zed context compaction and wire it into LiteLLM as local-compact."
+            "content": "Build a deterministic fake-LLM compactor service for Zed context compaction and wire it into LiteLLM as rustysqueezer."
         }));
         for i in 0..20 {
             msgs.push(json!({
@@ -467,7 +467,7 @@ mod tests {
             "tool_calls": [{
                 "id": "t1",
                 "type": "function",
-                "function": {"name": "terminal", "arguments": "{\"command\": \"docker compose ps\", \"cd\": \"/data/docker/local-compact\"}"}
+                "function": {"name": "terminal", "arguments": "{\"command\": \"docker compose ps\", \"cd\": \"/data/docker/rustysqueezer\"}"}
             }]
         }));
         msgs.push(json!({

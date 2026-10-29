@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `local-compact`. Dates are the commit dates on `main`.
+All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
 
 ## 2026-10-29
 

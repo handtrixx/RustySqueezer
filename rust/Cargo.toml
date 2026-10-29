@@ -1,5 +1,5 @@
 [package]
-name = "local-compact"
+name = "rustysqueezer"
 version = "0.2.0"
 edition = "2021"
 

@@ -110,7 +110,7 @@ async fn main() {
         .with_state(cfg);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-    println!("local-compact listening on {addr}");
+    println!("rustysqueezer listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }

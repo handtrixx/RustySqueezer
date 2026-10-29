@@ -7,6 +7,6 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /src/target/release/local-compact /usr/local/bin/local-compact
+COPY --from=builder /src/target/release/rustysqueezer /usr/local/bin/rustysqueezer
 EXPOSE 8000
-CMD ["local-compact"]
+CMD ["rustysqueezer"]

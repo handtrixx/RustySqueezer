@@ -1,8 +1,8 @@
-# local-compact
+# RustySqueezer
 
-[![build-image](https://github.com/handtrixx/local-compact/actions/workflows/build-image.yml/badge.svg)](https://github.com/handtrixx/local-compact/actions/workflows/build-image.yml)
+[![build-image](https://github.com/handtrixx/RustySqueezer/actions/workflows/build-image.yml/badge.svg)](https://github.com/handtrixx/RustySqueezer/actions/workflows/build-image.yml)
 
-**A fake LLM for context compaction.** `local-compact` exposes an OpenAI-compatible
+**A fake LLM for context compaction.** `rustysqueezer` exposes an OpenAI-compatible
 HTTP endpoint that answers compaction requests with a deterministic, extractive
 summary of the conversation - **without calling any language model**.
 
@@ -23,7 +23,7 @@ you end up paying a 1M-context cloud model for every compaction event.
 
 The insight: **compaction does not need a model.** It needs a good extractive
 summary of what was asked, what was run, what broke and what was just said.
-`local-compact` does exactly that, in a few milliseconds, for free, and always
+`rustysqueezer` does exactly that, in a few milliseconds, for free, and always
 produces byte-identical output for the same input (which keeps prefix caches
 warm).
 
@@ -85,7 +85,7 @@ curl -s localhost:8000/v1/models
 
 | method | path | behaviour |
 |---|---|---|
-| `GET` | `/health` | `{"status":"ok","model":"local-compact"}` |
+| `GET` | `/health` | `{"status":"ok","model":"rustysqueezer"}` |
 | `GET` | `/v1/models` | the single model id (`MODEL_NAME`) |
 | `POST` | `/v1/chat/completions` | returns the summary as the assistant message |
 
@@ -97,7 +97,7 @@ is answered with a summary of the thread it was given.
 ```bash
 curl -s localhost:8000/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"local-compact","messages":[
+  -d '{"model":"rustysqueezer","messages":[
     {"role":"user","content":"Fix the nginx upstream timeout in docker/traefik"},
     {"role":"assistant","content":"I ran `docker compose up -d`; it failed with exit code 1."},
     {"role":"user","content":"Please summarize the conversation so far"}
@@ -120,7 +120,7 @@ Two layers, both optional:
 | variable | default | meaning |
 |---|---|---|
 | `PORT` | `8000` | listen port |
-| `MODEL_NAME` | `local-compact` | model id on `/v1/models` |
+| `MODEL_NAME` | `rustysqueezer` | model id on `/v1/models` |
 | `CONFIG_PATH` | unset | JSON config file (see above) |
 | `MAX_SUMMARY_CHARS` | `12000` | hard cap on the summary, split per section |
 | `TAIL_TURNS` / `TAIL_CHARS` | `6` / `600` | verbatim tail: how many turns, how long each |
@@ -157,15 +157,15 @@ publishes to GitHub Container Registry, so deployments never build from source:
 
 | tag | contents |
 |---|---|
-| `ghcr.io/handtrixx/local-compact:latest` | Rust binary from `rust/Dockerfile` |
-| `ghcr.io/handtrixx/local-compact:<sha>` | the same, pinned to the commit |
+| `ghcr.io/handtrixx/rustysqueezer:latest` | Rust binary from `rust/Dockerfile` |
+| `ghcr.io/handtrixx/rustysqueezer:<sha>` | the same, pinned to the commit |
 
 The package is private, so pulling it needs `docker login ghcr.io` once.
 `rust/compose.yml` is a ready-made single-service compose file; the binary is
 ~3.5 MB and starts instantly.
 
 ```bash
-docker run -d -p 8000:8000 -e MAX_SUMMARY_CHARS=12000 ghcr.io/handtrixx/local-compact:latest
+docker run -d -p 8000:8000 -e MAX_SUMMARY_CHARS=12000 ghcr.io/handtrixx/rustysqueezer:latest
 ```
 
 ## Wiring it into an agent
@@ -184,14 +184,14 @@ OpenAI-compatible model with a large window, then point compaction at it:
         "api_url": "http://localhost:8000/v1",
         "api_key": "none",
         "available_models": [
-          { "name": "local-compact", "max_tokens": 1000000, "capabilities": { "chat_completions": true } }
+          { "name": "rustysqueezer", "max_tokens": 1000000, "capabilities": { "chat_completions": true } }
         ]
       }
     }
   },
   "agent": {
-    "compaction_model": { "provider": "LocalCompact", "model": "local-compact" },
-    "thread_summary_model": { "provider": "LocalCompact", "model": "local-compact" }
+    "compaction_model": { "provider": "LocalCompact", "model": "rustysqueezer" },
+    "thread_summary_model": { "provider": "LocalCompact", "model": "rustysqueezer" }
   }
 }
 ```
@@ -199,9 +199,9 @@ OpenAI-compatible model with a large window, then point compaction at it:
 **LiteLLM** (`litellm_config.yaml`):
 
 ```yaml
-- model_name: local-compact
+- model_name: rustysqueezer
   litellm_params:
-    model: openai/local-compact
+    model: openai/rustysqueezer
     api_base: http://localhost:8000/v1
     api_key: none
   model_info:

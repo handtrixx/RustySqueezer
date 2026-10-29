@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Evaluation harness for local-compact.
+"""Evaluation harness for rustysqueezer.
 
 Measures compression quality against synthetic threads with known "needles"
 (facts that must survive compaction), plus compression ratio and
-determinism. Run against any local-compact instance:
+determinism. Run against any rustysqueezer instance:
 
     python eval/eval.py --url http://localhost:8000/v1
-    python eval/eval.py --url https://ai.handtrixxx.com/v1 --model local-compact
+    python eval/eval.py --url https://ai.handtrixxx.com/v1 --model rustysqueezer
 
 Exits non-zero if any scenario drops needles (recall < threshold), so it
 can be used as a regression check in CI or before deploying an update.
@@ -72,7 +72,7 @@ def scenario_code_agent():
         {
             "role": "user",
             "content": (
-                "Wire the local-compact compactor into the LiteLLM gateway and "
+                "Wire the rustysqueezer compactor into the LiteLLM gateway and "
                 "deploy it on handtrixxx.com. Decision: use the Rust binary image "
                 "pulled from GHCR, never build on the host."
             ),
@@ -84,7 +84,7 @@ def scenario_code_agent():
                 f"Step {i}: editing the compactor and running checks; the scoring "
                 "function needs a recency bonus for sentences with digits.",
                 command=f"pytest -q test_thread_{i}.py",
-                path=f"/data/github/local-compact/eval/case_{i}.json",
+                path=f"/data/github/RustySqueezer/eval/case_{i}.json",
             )
         )
         msgs.append(
@@ -230,7 +230,7 @@ def scenario_long_realistic():
                         "function": {
                             "name": "terminal",
                             "arguments": json.dumps(
-                                {"command": f"probe-{i} --verbose", "cd": "/data/github/local-compact"}
+                                {"command": f"probe-{i} --verbose", "cd": "/data/github/rustysqueezer"}
                             ),
                         },
                     }
@@ -320,7 +320,7 @@ def run_scenario(url, model, name, messages, needles, threshold, max_ratio=None,
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--url", default="http://localhost:8000/v1")
-    ap.add_argument("--model", default="local-compact")
+    ap.add_argument("--model", default="rustysqueezer")
     ap.add_argument("--threshold", type=float, default=0.95)
     args = ap.parse_args()
     cap = max_summary_chars(args.url)

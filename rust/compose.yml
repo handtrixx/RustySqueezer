@@ -1,13 +1,13 @@
-# local-compact service (single Rust binary, negligible startup).
+# rustysqueezer service (single Rust binary, negligible startup).
 # Same env vars as .env.example; port 8000.
 services:
-  local-compact:
+  rustysqueezer:
     build: .
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      MODEL_NAME: local-compact
+      MODEL_NAME: rustysqueezer
       MAX_SUMMARY_CHARS: "12000"
       TAIL_TURNS: "6"
       ASSIST_ENABLED: "false"

@@ -1,5 +1,5 @@
 {
-  "model_name": "local-compact",
+  "model_name": "rustysqueezer",
   "max_summary_chars": 12000,
   "tail_turns": 6,
   "tail_chars": 600,
@@ -32,7 +32,7 @@
     "assist": 2
   },
   "section_titles": {
-    "header": "Conversation summary (deterministic compaction by local-compact)",
+    "header": "Conversation summary (deterministic compaction by rustysqueezer)",
     "note": "(Compaction requested by the agent harness; the task below is the original request.)",
     "original_task": "Original task",
     "followups": "Follow-up user messages",

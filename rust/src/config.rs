@@ -51,7 +51,7 @@ fn env_int(name: &str, default: i64) -> usize {
 
 fn default_titles() -> HashMap<String, String> {
     let mut t = HashMap::new();
-    t.insert("header".to_string(), "Conversation summary (deterministic compaction by local-compact)".to_string());
+    t.insert("header".to_string(), "Conversation summary (deterministic compaction by rustysqueezer)".to_string());
     t.insert("note".to_string(), "(Compaction requested by the agent harness; the task below is the original request.)".to_string());
     t.insert("original_task".to_string(), "Original task".to_string());
     t.insert("followups".to_string(), "Follow-up user messages".to_string());
@@ -81,7 +81,7 @@ fn default_budgets() -> HashMap<String, usize> {
 
 fn defaults() -> Config {
     Config {
-        model: "local-compact".to_string(),
+        model: "rustysqueezer".to_string(),
         max_summary_chars: 12000,
         tail_turns: 6,
         tail_chars: 600,
@@ -182,9 +182,9 @@ impl Config {
             match std::fs::read_to_string(&path) {
                 Ok(text) => match serde_json::from_str::<Value>(&text) {
                     Ok(v) => apply_json(&mut cfg, &v),
-                    Err(e) => eprintln!("local-compact: ignoring CONFIG_PATH {path}: {e}"),
+                    Err(e) => eprintln!("rustysqueezer: ignoring CONFIG_PATH {path}: {e}"),
                 },
-                Err(e) => eprintln!("local-compact: ignoring CONFIG_PATH {path}: {e}"),
+                Err(e) => eprintln!("rustysqueezer: ignoring CONFIG_PATH {path}: {e}"),
             }
         }
         // Environment variables win over the config file.
