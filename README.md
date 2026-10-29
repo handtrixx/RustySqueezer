@@ -1,6 +1,11 @@
 # RustySqueezer
 
+<p align="center">
+  <img src="rustysqueezer.png" alt="RustySqueezer logo" width="260">
+</p>
+
 [![build-image](https://github.com/handtrixx/RustySqueezer/actions/workflows/build-image.yml/badge.svg)](https://github.com/handtrixx/RustySqueezer/actions/workflows/build-image.yml)
+[![website](https://img.shields.io/badge/website-RustySqueezer-informational)](https://handtrixx.github.io/RustySqueezer/)
 
 **A fake LLM for context compaction.** `rustysqueezer` exposes an OpenAI-compatible
 HTTP endpoint that answers compaction requests with a deterministic, extractive

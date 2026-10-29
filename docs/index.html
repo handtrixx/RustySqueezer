@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RustySqueezer - deterministic context compaction without a model</title>
+  <meta name="description" content="RustySqueezer is a fake LLM for context compaction: an OpenAI-compatible endpoint that produces deterministic, extractive summaries of agent threads without calling any language model.">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #e6e6e6;
+      --muted: #8b949e;
+      --accent: #d29922;
+      --accent2: #3fb68b;
+      --code-bg: #101418;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+    }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 24px 20px 60px; }
+    header.hero {
+      display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: var(--panel); padding: 24px; margin-bottom: 28px;
+    }
+    header.hero img { width: 160px; height: 160px; border-radius: 8px; }
+    h1 { margin: 0 0 6px; font-size: 28px; }
+    .tagline { color: var(--muted); margin: 0 0 10px; }
+    .badges { display: flex; gap: 10px; flex-wrap: wrap; }
+    .badges a { color: var(--accent2); text-decoration: none; font-size: 14px; }
+    section { margin: 30px 0; }
+    h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 14px; }
+    h3 { font-size: 16px; margin-top: 18px; }
+    p { margin: 10px 0; }
+    code, pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      background: var(--code-bg); border: 1px solid var(--border);
+    }
+    code { padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    pre { padding: 12px 14px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 12px 0; }
+    th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
+    th { background: var(--panel); }
+    .flow {
+      background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 14px; font-family: monospace; font-size: 14px;
+    }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+    .card { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 14px; }
+    .card h3 { margin: 0 0 8px; font-size: 15px; color: var(--accent); }
+    .card p { margin: 0; color: var(--muted); font-size: 14px; }
+    ul { margin: 10px 0; }
+    li { margin: 6px 0; }
+    footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); padding-top: 16px; margin-top: 40px; }
+    footer a { color: var(--accent2); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <img src="rustysqueezer.png" alt="RustySqueezer logo">
+      <div>
+        <h1>RustySqueezer</h1>
+        <p class="tagline">A fake LLM for context compaction: deterministic, extractive thread summaries with no language model involved.</p>
+        <div class="badges">
+          <a href="https://github.com/handtrixx/RustySqueezer">GitHub repository</a>
+          <a href="https://github.com/handtrixx/RustySqueezer/actions/workflows/build-image.yml">Build status</a>
+          <a href="https://github.com/handtrixx/RustySqueezer/blob/main/README.md">Full README</a>
+        </div>
+      </div>
+    </header>
+
+    <section>
+      <h2>Why it exists</h2>
+      <p>Agents compact long threads by sending the whole thread to a summarising model.
+      That request must fit inside the summariser's context window, so a local model with a
+      modest window (e.g. 131k tokens) cannot compact its own threads, and you end up paying
+      a 1M-context cloud model for every compaction event.</p>
+      <p>The insight: <strong>compaction does not need a model.</strong> It needs a good
+      extractive summary of what was asked, what was run, what broke, and what was just said.
+      RustySqueezer does exactly that, in a few milliseconds, for free, and always produces
+      byte-identical output for the same input (which keeps prefix caches warm).</p>
+      <div class="flow">agent -- POST /v1/chat/completions -- structured summary (5-10% of thread)</div>
+    </section>
+
+    <section>
+      <h2>How it works</h2>
+      <p>The chat-completions endpoint parses the messages array and builds a markdown summary
+      from the thread:</p>
+      <ol>
+        <li>Detect the compaction request: if the last user message matches known compaction
+        instruction patterns (Zed, Claude Code-style compact, generic "summarize the
+        conversation so far"), it is treated as an instruction and removed from the thread.</li>
+        <li>Split the thread into the original task, follow-up user messages, shell commands
+        actually run, file paths touched, error lines, and the most recent verbatim tail of turns.</li>
+        <li>Score assistant sentences with a TF-IDF-ish term-importance heuristic and keep the
+        highest-scoring key points.</li>
+        <li>Apply per-section budgets: every section gets its own slice of MAX_SUMMARY_CHARS;
+        the verbatim tail gets the largest share, and surplus items are dropped with an explicit
+        omission note, so long threads never lose their tail.</li>
+        <li>Optional: add highlights from a small local model when ASSIST_ENABLED is true.
+        If the assist call fails, the section is skipped and the output stays deterministic.</li>
+      </ol>
+      <h3>Sections and default budgets</h3>
+      <table>
+        <tr><th>Section</th><th>Default share</th><th>What it contains</th></tr>
+        <tr><td>tail</td><td>50 %</td><td>most recent turns, verbatim (newest first, clipped)</td></tr>
+        <tr><td>commands</td><td>12 %</td><td>shell commands actually run, most recent first</td></tr>
+        <tr><td>followups</td><td>10 %</td><td>later user messages</td></tr>
+        <tr><td>key_points</td><td>10 %</td><td>highest-scoring assistant sentences</td></tr>
+        <tr><td>errors</td><td>8 %</td><td>error/failure lines</td></tr>
+        <tr><td>files</td><td>8 %</td><td>file paths mentioned by tools</td></tr>
+        <tr><td>original_task</td><td>6 %</td><td>first user message</td></tr>
+        <tr><td>tools</td><td>4 %</td><td>distinct tool names</td></tr>
+        <tr><td>assist</td><td>2 %</td><td>optional small-model highlights</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>Quick start</h2>
+      <pre>cd rust
+cargo run   # or: docker compose up -d
+curl -s localhost:8000/health
+curl -s localhost:8000/v1/models</pre>
+      <h3>API</h3>
+      <table>
+        <tr><th>Method</th><th>Path</th><th>Behaviour</th></tr>
+        <tr><td>GET</td><td>/health</td><td>health check with model id</td></tr>
+        <tr><td>GET</td><td>/v1/models</td><td>single model id (MODEL_NAME)</td></tr>
+        <tr><td>POST</td><td>/v1/chat/completions</td><td>OpenAI-compatible; returns the summary of the thread it was given (streaming or non-streaming)</td></tr>
+      </table>
+      <pre>curl -s localhost:8000/v1/chat/completions -H 'content-type: application/json' -d '{"model":"rustysqueezer","messages":[{"role":"user","content":"Fix the nginx upstream timeout in docker/traefik"},{"role":"assistant","content":"I ran docker compose up -d; failed exit code 1."},{"role":"user","content":"Please summarize conversation so far"}]}'</pre>
+      <p>The usage field reports token counts from the deterministic tokenizer, so
+      completion_tokens / prompt_tokens is the real compression ratio.</p>
+    </section>
+
+    <section>
+      <h2>Configuration</h2>
+      <p>Two layers, both optional:</p>
+      <ul>
+        <li><strong>Environment variables</strong> (see .env.example) - simple knobs.</li>
+        <li><strong>A JSON config file</strong> (CONFIG_PATH, see config.example.json) - detection
+        rules, error/file patterns, enabled sections, titles and budgets. Unknown keys are ignored,
+        partial maps merge, and MAX_* / TAIL_* env variables still win over the file.</li>
+      </ul>
+      <table>
+        <tr><th>Variable</th><th>Default</th><th>Meaning</th></tr>
+        <tr><td>PORT</td><td>8000</td><td>listen port</td></tr>
+        <tr><td>MODEL_NAME</td><td>rustysqueezer</td><td>model id on /v1/models</td></tr>
+        <tr><td>CONFIG_PATH</td><td>unset</td><td>JSON config file</td></tr>
+        <tr><td>MAX_SUMMARY_CHARS</td><td>12000</td><td>hard cap on the summary, split per section</td></tr>
+        <tr><td>TAIL_TURNS / TAIL_CHARS</td><td>6 / 600</td><td>verbatim tail: how many turns, how long each</td></tr>
+        <tr><td>MAX_COMMANDS / MAX_FILES / MAX_ERRORS / MAX_KEY_POINTS</td><td>25 / 60 / 20 / 40</td><td>per-section item caps</td></tr>
+        <tr><td>ASSIST_ENABLED</td><td>false</td><td>add highlights from a small local model via ASSIST_MODEL_URL</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>Evaluation</h2>
+      <p><code>eval/eval.py</code> (stdlib only, no dependencies) replays synthetic threads with
+      known needles - facts that must survive compaction - against a live instance and reports
+      needle recall, compression ratio, determinism and budget compliance:</p>
+      <pre>python3 eval/eval.py --url http://localhost:8000/v1</pre>
+      <p>Scenarios include a ~190k-token tool-heavy thread. The harness fails (non-zero exit)
+      if recall drops below the threshold or a section exceeds its budget, so it doubles as a
+      regression gate before deploying an update, and it runs in CI.</p>
+    </section>
+
+    <section>
+      <h2>Deployment</h2>
+      <p>CI (the build-image workflow) builds on every push to main and publishes to GitHub
+      Container Registry; deployments never build from source:</p>
+      <table>
+        <tr><th>Tag</th><th>Contents</th></tr>
+        <tr><td>ghcr.io/handtrixx/rustysqueezer:latest</td><td>Rust binary from rust/Dockerfile</td></tr>
+        <tr><td>ghcr.io/handtrixx/rustysqueezer:sha</td><td>same, pinned to a commit</td></tr>
+      </table>
+      <pre>docker run -d -p 8000:8000 -e MAX_SUMMARY_CHARS=12000 ghcr.io/handtrixx/rustysqueezer:latest</pre>
+      <p>The binary is about 3.5 MB and starts instantly; <code>rust/compose.yml</code> is a
+      ready-made single-service compose file.</p>
+    </section>
+
+    <section>
+      <h2>Wiring into an agent</h2>
+      <div class="cards">
+        <div class="card">
+          <h3>Zed</h3>
+          <p>Declare the endpoint as an OpenAI-compatible model with a large context window in
+          ~/.config/zed/settings.json under language_models.openai_compatible, then point
+          agent.compaction_model at it.</p>
+        </div>
+        <div class="card">
+          <h3>LiteLLM</h3>
+          <p>Add an openai/rustysqueezer entry in litellm_config.yaml pointing at
+          http://localhost:8000/v1 with a large max_tokens.</p>
+        </div>
+        <div class="card">
+          <h3>Anything else</h3>
+          <p>Any harness that picks a summariser via an OpenAI-compatible chat endpoint can use
+          RustySqueezer as a drop-in.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Limitations</h2>
+      <ul>
+        <li>Extractive, not abstractive: nuance is lost in very long, meandering threads.</li>
+        <li>Heuristics (error regex, sentence splitting, file patterns) are tuned for code-agent
+        traffic; retune them via config.json for other harnesses.</li>
+        <li>Token counting is word-boundary based, not exact cl100k BPE.</li>
+        <li>Only the OpenAI chat-completion surface is implemented - no Anthropic messages API,
+        no embeddings, no tool calling.</li>
+        <li>No authentication: run it on a private network or behind a reverse proxy.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Roadmap</h2>
+      <ul>
+        <li>Generic config - done.</li>
+        <li>Rust rewrite - done; the Python prototype was removed.</li>
+        <li>Deterministic token counting - done.</li>
+        <li>Evaluation harness with ratio and budget assertions in CI - done.</li>
+        <li>Per-section budgeting - done.</li>
+        <li>Anthropic Messages API and Ollama native surface - open.</li>
+        <li>Quality tuning against real agent threads - open.</li>
+      </ul>
+    </section>
+
+    <footer>
+      MIT licensed - see LICENSE. History in CHANGELOG.md.
+      Source: <a href="https://github.com/handtrixx/RustySqueezer">github.com/handtrixx/RustySqueezer</a>
+    </footer>
+  </div>
+</body>
+</html>
