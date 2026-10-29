@@ -36,23 +36,3 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/local-compact:latest
             ghcr.io/${{ github.repository_owner }}/local-compact:${{ github.sha }}
-
-  rust:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ github.token }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: ./rust
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/local-compact:latest
-            ghcr.io/${{ github.repository_owner }}/local-compact:${{ github.sha }}
