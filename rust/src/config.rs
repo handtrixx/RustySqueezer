@@ -36,6 +36,10 @@ pub struct Config {
     pub file_re: Regex,
     pub sections: Vec<String>,
     pub titles: HashMap<String, String>,
+    // Budget share (percent of max_summary_chars) reserved for each section.
+    // The tail gets the largest slice: it is the part the agent needs verbatim
+    // to continue, so it is budgeted before everything else.
+    pub budgets: HashMap<String, usize>,
 }
 
 fn env_int(name: &str, default: i64) -> usize {
@@ -59,6 +63,20 @@ fn default_titles() -> HashMap<String, String> {
     t.insert("tail".to_string(), "Most recent turns (verbatim, clipped)".to_string());
     t.insert("assist".to_string(), "Small-model highlights".to_string());
     t
+}
+
+fn default_budgets() -> HashMap<String, usize> {
+    let mut b = HashMap::new();
+    b.insert("tail".to_string(), 50);
+    b.insert("commands".to_string(), 12);
+    b.insert("followups".to_string(), 10);
+    b.insert("key_points".to_string(), 10);
+    b.insert("errors".to_string(), 8);
+    b.insert("files".to_string(), 8);
+    b.insert("original_task".to_string(), 6);
+    b.insert("tools".to_string(), 4);
+    b.insert("assist".to_string(), 2);
+    b
 }
 
 fn defaults() -> Config {
@@ -85,6 +103,7 @@ fn defaults() -> Config {
             DEFAULT_FILE_EXTENSIONS.join("|")
         ))
         .unwrap(),
+        budgets: default_budgets(),
         sections: vec![
             "original_task".into(),
             "followups".into(),
@@ -147,6 +166,13 @@ fn apply_json(cfg: &mut Config, v: &Value) {
             }
         }
     }
+    if let Some(shares) = v.get("section_budgets").and_then(|x| x.as_object()) {
+        for (key, share) in shares {
+            if let Some(n) = share.as_u64() {
+                cfg.budgets.insert(key.clone(), n.min(100) as usize);
+            }
+        }
+    }
 }
 
 impl Config {
@@ -182,6 +208,15 @@ impl Config {
             .to_lowercase();
         cfg.assist_enabled = assist == "1" || assist == "true" || assist == "yes";
         cfg
+    }
+
+    /// Chars a section's body may use: its share of the content budget (the
+    /// part of max_summary_chars left after headers and section titles),
+    /// normalised over the shares of the sections that are actually enabled so
+    /// disabling a section hands its budget to the others.
+    pub fn section_cap(&self, key: &str, content_budget: usize, total_share: usize) -> usize {
+        let share = self.budgets.get(key).copied().unwrap_or(0);
+        content_budget * share / total_share.max(1)
     }
 
     pub fn title(&self, key: &str) -> String {

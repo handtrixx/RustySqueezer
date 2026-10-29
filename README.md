@@ -35,7 +35,11 @@ For every `POST /v1/chat/completions` it:
    - tools used, error/failure lines
    - key assistant sentences, scored by task-term overlap + recency (TF-IDF-ish)
    - the last `TAIL_TURNS` turns verbatim (clipped) so the agent can continue
-3. optionally appends "highlights" from a small local model if
+4. each section is budgeted separately (see `section_budgets`): the verbatim
+   tail gets the largest slice, and if a section runs out of budget its surplus
+   items are dropped with an explicit `(+N more ... omitted by the budget)`
+   note instead of the whole summary being clipped at the end.
+5. optionally appends "highlights" from a small local model if
    `ASSIST_ENABLED=true` (any OpenAI-compatible endpoint: llama.cpp, Ollama, vLLM).
 
 Same input always produces byte-identical output, which keeps prefix caches warm.
@@ -55,9 +59,12 @@ Claude Code, OpenClaw or custom pipelines instead of Zed's prompt shape:
 }
 ```
 
-Unknown keys are ignored, `section_titles` merges partially, and the `MAX_*`
-/ `TAIL_*` env variables (see below) still override the file. Defaults equal
-the original Zed-tuned behaviour, so parity with previous builds is kept.
+Unknown keys are ignored, `section_titles` and `section_budgets` merge partially,
+and the `MAX_*` / `TAIL_*` env variables (see below) still override the file.
+`section_budgets` are percent shares of `max_summary_chars`, normalised over the
+sections that are actually enabled (dropping a section hands its budget to the
+rest). Defaults equal the original Zed-tuned behaviour, so parity with previous
+builds is kept.
 
 ```text
 agent ──► local-compact ──► structured summary (~5-10% of the original thread)
@@ -136,7 +143,7 @@ BPE - good enough for budgeting and compression-ratio reporting.
 Everything is environment driven (see `.env.example`):
 |---|---|---|
 | `MODEL_NAME` | `local-compact` | Model id exposed on `/v1/models` |
-| `MAX_SUMMARY_CHARS` | `12000` | Hard cap on the summary length |
+| `MAX_SUMMARY_CHARS` | `12000` | Hard cap on the summary length (split per section by `section_budgets`) |
 | `TAIL_TURNS` / `TAIL_CHARS` | `6` / `600` | Verbatim tail: how many turns, how long each |
 | `MAX_COMMANDS` / `MAX_FILES` / `MAX_ERRORS` / `MAX_KEY_POINTS` | `25` / `60` / `20` / `40` | Per-section caps |
 | `ASSIST_ENABLED` | `false` | Use a small local model for extra highlights |
@@ -212,9 +219,15 @@ a regression check before deploying an update.
 3. ~~Real token counting~~ - done 2026-10-28 (deterministic word-boundary
    tokenizer, identical in Python and Rust; exact cl100k remains out of scope).
 4. ~~Evaluation harness~~ - done 2026-10-28 (`eval/eval.py`: needle recall,
-   compression ratio, determinism against any endpoint).
-5. Anthropic Messages API + Ollama native surface - postponed.
-6. Quality tuning against real agent threads (the harness makes this measurable).
+   compression ratio, determinism against any endpoint). Extended 2026-10-29 with
+   a ~130k-token tool-heavy scenario plus ratio and budget assertions, and CI now
+   runs the harness on every push.
+5. ~~Per-section budgeting~~ - done 2026-10-29: sections get explicit budget
+   slices (tail first) so long threads no longer lose the verbatim tail to an
+   end-of-summary clip.
+6. Anthropic Messages API + Ollama native surface - postponed.
+7. Quality tuning against real agent threads (the harness now makes this
+   measurable).
 
 ## License
 

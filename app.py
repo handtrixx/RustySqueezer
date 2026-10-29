@@ -60,6 +60,20 @@ DEFAULT_CONFIG = {
         "original_task", "followups", "commands", "files", "tools",
         "errors", "key_points", "tail",
     ],
+    # Budget share (percent of max_summary_chars) per section. The verbatim
+    # tail gets the largest slice because it is what the agent needs to
+    # continue from; shares are normalised over the enabled sections.
+    "section_budgets": {
+        "tail": 50,
+        "commands": 12,
+        "followups": 10,
+        "key_points": 10,
+        "errors": 8,
+        "files": 8,
+        "original_task": 6,
+        "tools": 4,
+        "assist": 2,
+    },
     "section_titles": {
         "header": "Conversation summary (deterministic compaction by local-compact)",
         "note": "(Compaction requested by the agent harness; the task below is the original request.)",
@@ -296,6 +310,27 @@ def assist_summarize(text):
         return ""  # deterministic fallback: skip the assist section
 
 
+def fit_lines(lines, cap):
+    """Keep lines in order while they fit cap chars; return (kept, dropped)."""
+    kept, used = [], 0
+    for line in lines:
+        cost = len(line) + (0 if not kept else 1)
+        if used + cost > cap:
+            break
+        used += cost
+        kept.append(line)
+    return kept, len(lines) - len(kept)
+
+
+def section_body(lines, cap, label):
+    """Section body capped to its budget slice, with a note when items are dropped."""
+    kept, dropped = fit_lines(lines, max(0, cap - 40))
+    body = "\n".join(kept)
+    if dropped:
+        body += f"\n(+{dropped} more {label} omitted by the budget)"
+    return body
+
+
 def build_summary(messages):
     thread = list(messages)
     # Zed appends the compaction instruction as a final user message.
@@ -319,17 +354,39 @@ def build_summary(messages):
     titles = CFG["section_titles"]
     parts = []
     parts.append("## " + titles["header"])
+
+    # Fixed cost of the header and every section title; the remainder of the
+    # budget is split per section so a huge section cannot push the verbatim
+    # tail past the cap (the old build clipped the assembled summary instead).
+    enabled = list(sections) + (["assist"] if ASSIST_ENABLED else [])
+    budgets = CFG["section_budgets"]
+    overhead = len(titles["header"]) + 4
+    if instruction:
+        overhead += len(titles["note"]) + 4
+    for key in enabled:
+        overhead += len(titles[key]) + 6  # "\n## <title>\n"
+    content_budget = max(0, MAX_SUMMARY_CHARS - overhead)
+    total_share = max(1, sum(budgets.get(k, 0) for k in enabled))
+
+    def cap(key):
+        return content_budget * budgets.get(key, 0) // total_share
+
     if instruction:
         parts.append(titles["note"])
     if "original_task" in sections and user_msgs:
-        parts.append("\n## " + titles["original_task"] + "\n" + clip(msg_text(user_msgs[0]), 1500))
+        parts.append(
+            "\n## " + titles["original_task"] + "\n"
+            + clip(msg_text(user_msgs[0]), min(1500, cap("original_task")))
+        )
     if "followups" in sections and user_msgs[1:]:
-        followups = "\n".join("- " + clip(msg_text(u), 300) for u in user_msgs[1:])
-        parts.append("\n## " + titles["followups"] + "\n" + followups)
+        followups = ["- " + clip(msg_text(u), 300) for u in user_msgs[1:]]
+        parts.append("\n## " + titles["followups"] + "\n" + section_body(followups, cap("followups"), "follow-ups"))
     if "commands" in sections and commands:
-        parts.append("\n## " + titles["commands"] + "\n" + "\n".join(f"- `{c}`" for c in reversed(commands[-MAX_COMMANDS:])))
+        lines = [f"- `{clip(c, 200)}`" for c in reversed(commands[-MAX_COMMANDS:])]
+        parts.append("\n## " + titles["commands"] + "\n" + section_body(lines, cap("commands"), "commands"))
     if "files" in sections and files:
-        parts.append("\n## " + titles["files"] + "\n" + "\n".join(f"- `{f}`" for f in dedup_keep_order(files, MAX_FILES)))
+        lines = [f"- `{clip(f, 120)}`" for f in dedup_keep_order(files, MAX_FILES)]
+        parts.append("\n## " + titles["files"] + "\n" + section_body(lines, cap("files"), "paths"))
     if "tools" in sections and tools:
         counts = Counter(tools)
         parts.append("\n## " + titles["tools"] + "\n" + ", ".join(f"{t} ({n})" for t, n in counts.most_common(10)))
@@ -340,15 +397,19 @@ def build_summary(messages):
                 errors.append(line.strip())
     errors = dedup_keep_order(errors, MAX_ERRORS)
     if "errors" in sections and errors:
-        parts.append("\n## " + titles["errors"] + "\n" + "\n".join("- " + e for e in errors))
+        lines = ["- " + e for e in errors]
+        parts.append("\n## " + titles["errors"] + "\n" + section_body(lines, cap("errors"), "error lines"))
     all_sents = [s for m in assistant_msgs for s in sentence_list(msg_text(m))]
     key = sorted(score_sentences(all_sents, task_terms, recency_weight=2.0), reverse=True)[:MAX_KEY_POINTS]
     if "key_points" in sections and key:
-        parts.append("\n## " + titles["key_points"] + "\n" + "\n".join("- " + clip(s, 300) for _, s in key))
-    # Verbatim tail: the turns the agent actually needs to continue from.
-    tail = thread[-TAIL_TURNS:]
+        lines = ["- " + clip(s, 300) for _, s in key]
+        parts.append("\n## " + titles["key_points"] + "\n" + section_body(lines, cap("key_points"), "key points"))
+    # Verbatim tail: the turns the agent actually needs to continue from. It is
+    # budgeted last but filled from the newest turn backwards, so if the tail
+    # does not fit the oldest tail turns are dropped (and reported) rather than
+    # the tail as a whole.
     tail_lines = []
-    for m in tail:
+    for m in thread[-TAIL_TURNS:]:
         role = m.get("role", "?")
         text = clip(msg_text(m), TAIL_CHARS)
         if m.get("tool_calls"):
@@ -356,11 +417,17 @@ def build_summary(messages):
             text = (text + f" [tool calls: {calls}]").strip()
         tail_lines.append(f"[{role}] {text}")
     if "tail" in sections:
-        parts.append("\n## " + titles["tail"] + "\n" + "\n\n".join(tail_lines))
+        kept, dropped = fit_lines(list(reversed(tail_lines)), max(0, cap("tail") - 40))
+        kept.reverse()
+        if dropped:
+            kept.insert(0, f"(+{dropped} older tail turns dropped by the budget)")
+        parts.append("\n## " + titles["tail"] + "\n" + "\n\n".join(kept))
     if ASSIST_ENABLED:
         assist = assist_summarize("\n".join(msg_text(m) for m in thread))
         if assist:
-            parts.append("\n## " + titles["assist"] + "\n" + assist)
+            parts.append("\n## " + titles["assist"] + "\n" + clip(assist, cap("assist")))
+    # Sections are budgeted individually, so this is only a safety net for a
+    # misconfigured section_budgets map (shares summing to more than 100).
     summary = "\n".join(parts)
     if len(summary) > MAX_SUMMARY_CHARS:
         summary = summary[: MAX_SUMMARY_CHARS - 20] + "\n[summary truncated]"

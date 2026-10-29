@@ -140,6 +140,35 @@ async fn assist_summarize(cfg: &Config, text: &str) -> String {
     }
 }
 
+/// Keep lines in order while they fit `cap` chars. Returns (kept, dropped).
+/// Deterministic greedy fill: instead of clipping the assembled summary at the
+/// end, every section is budgeted on its own.
+fn fit_lines(lines: &[String], cap: usize) -> (Vec<String>, usize) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for line in lines {
+        let cost = line.chars().count() + if kept.is_empty() { 0 } else { 1 };
+        if used + cost > cap {
+            break;
+        }
+        used += cost;
+        kept.push(line.clone());
+    }
+    let dropped = lines.len() - kept.len();
+    (kept, dropped)
+}
+
+/// Section body capped to its budget slice, with an explicit note when items
+/// had to be dropped (so the summary never silently loses content).
+fn section_body(lines: &[String], cap: usize, label: &str) -> String {
+    let (kept, dropped) = fit_lines(lines, cap.saturating_sub(40));
+    let mut body = kept.join("\n");
+    if dropped > 0 {
+        body.push_str(&format!("\n(+{} more {} omitted by the budget)", dropped, label));
+    }
+    body
+}
+
 pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     let mut thread: Vec<Value> = messages.to_vec();
     // Zed appends the compaction instruction as the final user message.
@@ -185,6 +214,27 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
 
     let mut parts: Vec<String> = Vec::new();
     parts.push(format!("## {}", cfg.title("header")));
+
+    // Fixed cost of the header and every section title; the rest of the budget
+    // is split per section (Config::budgets). Budgeting sections up front is
+    // what keeps the verbatim tail from being clipped away on long threads.
+    let mut enabled: Vec<String> = cfg.sections.clone();
+    if cfg.assist_enabled {
+        enabled.push("assist".to_string());
+    }
+    let mut overhead = cfg.title("header").chars().count() + 4;
+    if !instruction.is_empty() {
+        overhead += cfg.title("note").chars().count() + 4;
+    }
+    for key in &enabled {
+        overhead += cfg.title(key).chars().count() + 6; // "\n## <title>\n"
+    }
+    let content_budget = cfg.max_summary_chars.saturating_sub(overhead);
+    let total_share: usize = enabled
+        .iter()
+        .map(|k| cfg.budgets.get(k).copied().unwrap_or(0))
+        .sum();
+
     if !instruction.is_empty() {
         parts.push(cfg.title("note"));
     }
@@ -192,7 +242,10 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("original_task"),
-            clip(&msg_text(&user_msgs[0]), 1500)
+            clip(
+                &msg_text(&user_msgs[0]),
+                cfg.section_cap("original_task", content_budget, total_share).min(1500),
+            )
         ));
     }
     if cfg.section_enabled("followups") && user_msgs.len() > 1 {
@@ -203,28 +256,39 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("followups"),
-            followups.join("\n")
+            section_body(
+                &followups,
+                cfg.section_cap("followups", content_budget, total_share),
+                "follow-ups",
+            )
         ));
     }
     if cfg.section_enabled("commands") && !commands.is_empty() {
         let start = commands.len().saturating_sub(cfg.max_commands);
         let mut recent: Vec<String> = commands[start..].iter().cloned().collect();
         recent.reverse();
+        let lines: Vec<String> = recent
+            .iter()
+            .map(|c| format!("- `{}`", clip(c, 200)))
+            .collect();
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("commands"),
-            recent.iter().map(|c| format!("- `{}`", c)).collect::<Vec<_>>().join("\n")
+            section_body(&lines, cfg.section_cap("commands", content_budget, total_share), "commands")
         ));
     }
     if cfg.section_enabled("files") && !files.is_empty() {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("files"),
-            dedup_keep_order(&files, cfg.max_files)
-                .iter()
-                .map(|f| format!("- `{}`", f))
-                .collect::<Vec<_>>()
-                .join("\n")
+            section_body(
+                &dedup_keep_order(&files, cfg.max_files)
+                    .iter()
+                    .map(|f| format!("- `{}`", clip(f, 120)))
+                    .collect::<Vec<_>>(),
+                cfg.section_cap("files", content_budget, total_share),
+                "paths",
+            )
         ));
     }
     if cfg.section_enabled("tools") && !tools.is_empty() {
@@ -268,7 +332,11 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("errors"),
-            errors.iter().map(|e| format!("- {}", e)).collect::<Vec<_>>().join("\n")
+            section_body(
+                &errors.iter().map(|e| format!("- {}", e)).collect::<Vec<_>>(),
+                cfg.section_cap("errors", content_budget, total_share),
+                "error lines",
+            )
         ));
     }
     let all_sents: Vec<String> = assistant_msgs
@@ -285,13 +353,18 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("key_points"),
-            key.iter()
-                .map(|k| format!("- {}", clip(&k.text, 300)))
-                .collect::<Vec<_>>()
-                .join("\n")
+            section_body(
+                &key.iter()
+                    .map(|k| format!("- {}", clip(&k.text, 300)))
+                    .collect::<Vec<_>>(),
+                cfg.section_cap("key_points", content_budget, total_share),
+                "key points",
+            )
         ));
     }
-    // Verbatim tail: the turns the agent actually needs to continue from.
+    // Verbatim tail: the turns the agent actually needs to continue from. It is
+    // budgeted last but kept first: if the tail does not fit, the oldest tail
+    // turns are dropped (and reported), never the tail as a whole.
     let tail_start = thread.len().saturating_sub(cfg.tail_turns);
     let mut tail_lines = Vec::new();
     for m in &thread[tail_start..] {
@@ -313,19 +386,38 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         tail_lines.push(format!("[{}] {}", role, text));
     }
     if cfg.section_enabled("tail") {
+        let cap = cfg.section_cap("tail", content_budget, total_share).saturating_sub(40);
+        // Fill from the most recent turn backwards, then restore order.
+        let mut newest_first = tail_lines.clone();
+        newest_first.reverse();
+        let (kept, dropped) = fit_lines(&newest_first, cap);
+        let mut body = kept;
+        body.reverse();
+        if dropped > 0 {
+            body.insert(0, format!("(+{} older tail turns dropped by the budget)", dropped));
+        }
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("tail"),
-            tail_lines.join("\n\n")
+            body.join("\n\n")
         ));
     }
     if cfg.assist_enabled {
         let joined: Vec<String> = thread.iter().map(|m| msg_text(m)).collect();
         let assist = assist_summarize(cfg, &joined.join("\n")).await;
         if !assist.is_empty() {
-            parts.push(format!("\n## {}\n{}", cfg.title("assist"), assist));
+            parts.push(format!(
+                "\n## {}\n{}",
+                cfg.title("assist"),
+                clip(
+                    &assist,
+                    cfg.section_cap("assist", content_budget, total_share),
+                )
+            ));
         }
     }
+    // Sections are budgeted individually, so this is only a safety net for a
+    // misconfigured section_budgets map (shares summing to more than 100).
     let summary = parts.join("\n");
     if summary.chars().count() > cfg.max_summary_chars {
         let kept: String = summary.chars().take(cfg.max_summary_chars - 20).collect();
@@ -407,6 +499,45 @@ mod tests {
         }
         // Compaction instruction itself must not appear in the summary body tail.
         assert!(a.contains("docker compose ps"));
+    }
+
+    #[tokio::test]
+    async fn tail_survives_a_tight_budget() {
+        let mut cfg = Config::from_env();
+        cfg.max_summary_chars = 1200;
+        let thread = synthetic_thread();
+        let s = build_summary(&thread, &cfg).await;
+        let len = s.chars().count();
+        assert!(len <= cfg.max_summary_chars, "summary must fit the budget ({len})");
+        assert!(
+            !s.contains("[summary truncated]"),
+            "per-section budgeting should make the hard clip unnecessary"
+        );
+        // The newest turns (including the docker compose ps tool call) are what
+        // the agent needs to continue; they must not be the first thing cut.
+        assert!(s.contains("Most recent turns"), "tail section must be present");
+        assert!(s.contains("docker compose ps"), "verbatim tail must survive");
+    }
+
+    #[test]
+    fn section_shares_normalise_over_enabled_sections() {
+        let mut cfg = Config::from_env();
+        cfg.sections = vec!["commands".into(), "tail".into()];
+        // 12 + 50 shares: the tail still gets the bigger slice, and the two
+        // together use the whole content budget.
+        let tail = cfg.section_cap("tail", 1000, 62);
+        let commands = cfg.section_cap("commands", 1000, 62);
+        assert!(tail > commands);
+        // Integer division may leave at most one char of slack.
+        assert!(tail + commands >= 999, "shares should use the whole budget");
+    }
+
+    #[test]
+    fn fit_lines_reports_drops() {
+        let lines: Vec<String> = (0..5).map(|_| "a".repeat(30)).collect();
+        let (kept, dropped) = fit_lines(&lines, 100);
+        assert_eq!(kept.len(), 3); // 30 + 31 + 31 = 92, the fourth would be 123
+        assert_eq!(dropped, 2);
     }
 
     #[test]

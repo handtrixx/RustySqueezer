@@ -6,6 +6,17 @@ on:
   workflow_dispatch:
 
 jobs:
+  eval:
+    # Build the Rust binary and run the compaction harness against it: needle
+    # recall, determinism, compression ratio and the per-section budget.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t local-compact-eval ./rust
+      - run: docker run -d --name local-compact-eval -p 8000:8000 local-compact-eval
+      - run: sleep 3 && curl -fsS http://localhost:8000/health
+      - run: python3 eval/eval.py --url http://localhost:8000/v1
+
   rust:
     runs-on: ubuntu-latest
     permissions:

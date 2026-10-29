@@ -184,16 +184,127 @@ def scenario_long_noisy():
     return "long-noisy", msgs, needles
 
 
-def run_scenario(url, model, name, messages, needles, threshold):
+def thread_tokens(messages):
+    """Approximate prompt size, including tool-call arguments."""
+    total = 0
+    for m in messages:
+        total += count_tokens(m.get("content", ""))
+        for tc in m.get("tool_calls", []) or []:
+            total += count_tokens(tc.get("function", {}).get("arguments", ""))
+    return total
+
+
+def max_summary_chars(url):
+    """The cap the service actually runs with (from /health)."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=30) as resp:
+            return int(json.loads(resp.read()).get("max_summary_chars", 12000))
+    except Exception:
+        return 12000
+
+
+def scenario_long_realistic():
+    """~130k-token tool-heavy thread - the case that used to clip the tail.
+
+    Needles sit in the original task, the most recent commands, an early error
+    line, and the verbatim tail (last two turns), which is what the agent needs
+    to keep working.
+    """
+    filler = "Routine probing, retrying and reading output. " * 40
+    msgs = [
+        {"role": "system", "content": "You are the Zed coding agent. Follow AGENTS.md."},
+        {
+            "role": "user",
+            "content": "Fix the budgeting bug so the verbatim tail survives compaction (needle-task-tailbudget).",
+        },
+    ]
+    for i in range(250):
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": f"Step {i}: probing the service. {filler}",
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "type": "function",
+                        "function": {
+                            "name": "terminal",
+                            "arguments": json.dumps(
+                                {"command": f"probe-{i} --verbose", "cd": "/data/github/local-compact"}
+                            ),
+                        },
+                    }
+                ],
+            }
+        )
+        msgs.append({"role": "tool", "content": f"probe {i} output:\n{filler}"})
+        if i == 3:
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": "Error: needle-miderror-003 timeout while polling the health endpoint; will retry.",
+                }
+            )
+    # Many long follow-up user messages: in the old build these are uncapped in
+    # count and eat the whole 12000-char budget, so the verbatim tail was clipped
+    # away entirely. This is the regression this scenario guards against.
+    for i in range(60):
+        msgs.append({"role": "user", "content": f"followup-{i:03d}: " + filler})
+    msgs.append(
+        {
+            "role": "assistant",
+            "content": "Second-to-last turn: needle-tail-previous the section caps are in place, tests running.",
+            "tool_calls": [
+                {
+                    "id": "c999",
+                    "type": "function",
+                    "function": {
+                        "name": "terminal",
+                        "arguments": json.dumps({"command": "cargo test --release"}),
+                    },
+                }
+            ],
+        }
+    )
+    msgs.append(
+        {
+            "role": "assistant",
+            "content": "Final state: needle-tail-final compaction budgeting merged, health endpoint ok.",
+        }
+    )
+    msgs.append(
+        {
+            "role": "user",
+            "content": "Please summarize the conversation so far so the agent can continue the work.",
+        }
+    )
+    needles = [
+        "needle-task-tailbudget",  # original task
+        "probe-249 --verbose",  # most recent command
+        "needle-miderror-003",  # early error line (errors section keeps the first ones)
+        "cargo test --release",  # tool call in the tail
+        "needle-tail-previous",  # verbatim tail, not the last turn
+        "needle-tail-final",  # verbatim tail, last turn
+    ]
+    return "long-realistic", msgs, needles, 0.15
+
+
+def run_scenario(url, model, name, messages, needles, threshold, max_ratio=None, cap=None):
     summary, usage = call_compactor(url, model, messages)
     summary2, _ = call_compactor(url, model, messages)
     deterministic = summary == summary2
     hits = [n for n in needles if n in summary]
     recall = len(hits) / len(needles)
-    prompt_tokens = sum(count_tokens(m.get("content", "")) for m in messages)
+    prompt_tokens = thread_tokens(messages)
     summary_tokens = count_tokens(summary)
     ratio = summary_tokens / max(1, prompt_tokens)
     ok = recall >= threshold and deterministic
+    if max_ratio is not None and ratio > max_ratio:
+        print(f"  FAIL: summary is {ratio:.1%} of the thread, limit {max_ratio:.1%}")
+        ok = False
+    if cap is not None and len(summary) > cap:
+        print(f"  FAIL: summary {len(summary)} chars exceeds the {cap}-char budget")
+        ok = False
     print(f"[{name}] recall {recall:.0%} ({len(hits)}/{len(needles)}) | "
           f"{prompt_tokens} -> {summary_tokens} tokens ({ratio:.1%} kept) | "
           f"deterministic: {deterministic}")
@@ -212,6 +323,7 @@ def main():
     ap.add_argument("--model", default="local-compact")
     ap.add_argument("--threshold", type=float, default=0.95)
     args = ap.parse_args()
+    cap = max_summary_chars(args.url)
 
     all_ok = True
     for name, messages, needles in (
@@ -219,7 +331,9 @@ def main():
         scenario_generic_harness(),
         scenario_long_noisy(),
     ):
-        all_ok &= run_scenario(args.url, args.model, name, messages, needles, args.threshold)
+        all_ok &= run_scenario(args.url, args.model, name, messages, needles, args.threshold, cap=cap)
+    name, messages, needles, max_ratio = scenario_long_realistic()
+    all_ok &= run_scenario(args.url, args.model, name, messages, needles, args.threshold, max_ratio, cap)
 
     print("RESULT:", "PASS" if all_ok else "FAIL")
     return 0 if all_ok else 1

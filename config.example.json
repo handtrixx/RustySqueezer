@@ -20,6 +20,17 @@
     "original_task", "followups", "commands", "files", "tools",
     "errors", "key_points", "tail"
   ],
+  "section_budgets": {
+    "tail": 50,
+    "commands": 12,
+    "followups": 10,
+    "key_points": 10,
+    "errors": 8,
+    "files": 8,
+    "original_task": 6,
+    "tools": 4,
+    "assist": 2
+  },
   "section_titles": {
     "header": "Conversation summary (deterministic compaction by local-compact)",
     "note": "(Compaction requested by the agent harness; the task below is the original request.)",
