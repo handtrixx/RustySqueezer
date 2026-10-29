@@ -169,9 +169,48 @@ pub fn dedup_keep_order(items: &[String], cap: usize) -> Vec<String> {
     out
 }
 
+
+/// Sentences that are identical after normalisation (case, whitespace and
+/// trailing punctuation) are collapsed to their first occurrence. Repeated
+/// tool chatter ("Routine probing..." x 20) would otherwise eat the
+/// key-points budget several times over. Deterministic.
+fn normalize(s: &str) -> String {
+    let joined = s.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    joined
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .to_string()
+}
+
+pub fn dedup_normalized(items: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for item in items {
+        if seen.insert(normalize(item)) {
+            out.push(item.clone());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalized_dedup_collapses_repeats() {
+        let v = vec![
+            "Routine probing and reading output.".to_string(),
+            "routine probing and reading output!".to_string(),
+            "Real finding: the probe listens on 8003.".to_string(),
+        ];
+        assert_eq!(
+            dedup_normalized(&v),
+            vec![
+                "Routine probing and reading output.".to_string(),
+                "Real finding: the probe listens on 8003.".to_string()
+            ]
+        );
+    }
 
     #[test]
     fn token_counting() {

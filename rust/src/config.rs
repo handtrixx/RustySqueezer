@@ -23,11 +23,6 @@ pub struct Config {
     pub max_files: usize,
     pub max_errors: usize,
     pub max_key_points: usize,
-    pub assist_url: String,
-    pub assist_model: String,
-    pub assist_enabled: bool,
-    pub assist_max_input_chars: usize,
-    pub assist_max_tokens: usize,
     // Config-file driven behaviour (see config.example.json): detection rules,
     // error/file patterns, enabled sections and section titles.
     pub instruction_max_chars: usize,
@@ -61,7 +56,6 @@ fn default_titles() -> HashMap<String, String> {
     t.insert("errors".to_string(), "Errors / problems seen".to_string());
     t.insert("key_points".to_string(), "Key points from the assistant".to_string());
     t.insert("tail".to_string(), "Most recent turns (verbatim, clipped)".to_string());
-    t.insert("assist".to_string(), "Small-model highlights".to_string());
     t
 }
 
@@ -75,7 +69,6 @@ fn default_budgets() -> HashMap<String, usize> {
     b.insert("files".to_string(), 8);
     b.insert("original_task".to_string(), 6);
     b.insert("tools".to_string(), 4);
-    b.insert("assist".to_string(), 2);
     b
 }
 
@@ -89,11 +82,6 @@ fn defaults() -> Config {
         max_files: 60,
         max_errors: 20,
         max_key_points: 40,
-        assist_url: String::new(),
-        assist_model: "local-small".to_string(),
-        assist_enabled: false,
-        assist_max_input_chars: 2500,
-        assist_max_tokens: 500,
         instruction_max_chars: 4000,
         compact_re: Regex::new(DEFAULT_COMPACT_PATTERN).unwrap(),
         // Error detection is case-insensitive.
@@ -198,15 +186,6 @@ impl Config {
         cfg.max_files = env_int("MAX_FILES", cfg.max_files as i64);
         cfg.max_errors = env_int("MAX_ERRORS", cfg.max_errors as i64);
         cfg.max_key_points = env_int("MAX_KEY_POINTS", cfg.max_key_points as i64);
-        cfg.assist_max_input_chars =
-            env_int("ASSIST_MAX_INPUT_CHARS", cfg.assist_max_input_chars as i64);
-        cfg.assist_max_tokens = env_int("ASSIST_MAX_TOKENS", cfg.assist_max_tokens as i64);
-        cfg.assist_url = env::var("ASSIST_MODEL_URL").unwrap_or(cfg.assist_url.clone());
-        cfg.assist_model = env::var("ASSIST_MODEL").unwrap_or(cfg.assist_model.clone());
-        let assist = env::var("ASSIST_ENABLED")
-            .unwrap_or_else(|_| if cfg.assist_enabled { "1".to_string() } else { "false".to_string() })
-            .to_lowercase();
-        cfg.assist_enabled = assist == "1" || assist == "true" || assist == "yes";
         cfg
     }
 

@@ -49,10 +49,12 @@ warm).
 5. **Collect error lines** with a configurable regex.
 6. **Append the verbatim tail** - the last `TAIL_TURNS` turns, clipped - so the
    agent can continue exactly where it stopped.
-7. *(optional)* add "highlights" from a small local model when
-   `ASSIST_ENABLED=true` (any OpenAI-compatible endpoint: llama.cpp, Ollama,
-   vLLM). If the assist call fails, the section is skipped - the output stays
-   deterministic.
+
+Nothing in the request path calls a model. A generative "assist" section (small
+local LLM producing highlights) existed and was removed on 2026-10-29 after
+evaluation: it added 12-24 s of CPU latency per compaction, broke byte-identical
+determinism, and at a 2 % budget the model's output was mostly boilerplate rather
+than useful highlights. See [Design notes](#design-notes).
 
 Every section has its own slice of `MAX_SUMMARY_CHARS` (`section_budgets`). The
 verbatim tail gets the largest share; when a section runs out of budget its
@@ -72,7 +74,6 @@ to an end-of-summary clip.
 | `files` | 8 % | file paths mentioned by tools |
 | `original_task` | 6 % | the first user message |
 | `tools` | 4 % | distinct tool names |
-| `assist` | 2 % | optional small-model highlights |
 
 Shares are percentages of `MAX_SUMMARY_CHARS`, normalised over the sections that
 are actually enabled (disabling a section hands its budget to the rest).
@@ -130,10 +131,6 @@ Two layers, both optional:
 | `MAX_SUMMARY_CHARS` | `12000` | hard cap on the summary, split per section |
 | `TAIL_TURNS` / `TAIL_CHARS` | `6` / `600` | verbatim tail: how many turns, how long each |
 | `MAX_COMMANDS` / `MAX_FILES` / `MAX_ERRORS` / `MAX_KEY_POINTS` | `25` / `60` / `20` / `40` | per-section item caps |
-| `ASSIST_ENABLED` | `false` | add highlights from a small local model |
-| `ASSIST_MODEL_URL` | empty | OpenAI-compatible base URL of the assist model |
-| `ASSIST_MODEL` | `local-small` | assist model id |
-| `ASSIST_MAX_INPUT_CHARS` / `ASSIST_MAX_TOKENS` | `2500` / `500` | budget for the assist call |
 
 ### Token counting
 
@@ -154,6 +151,29 @@ python3 eval/eval.py --url http://localhost:8000/v1
 Scenarios include a ~190k-token tool-heavy thread; the harness fails (non-zero
 exit) if recall drops below the threshold or a section exceeds its budget, so it
 doubles as a regression gate before deploying an update.
+
+## Design notes: why not a model?
+
+The obvious upgrade - let a small local LLM write the summary, or use embeddings
+to pick sentences semantically - was measured on this hardware (i7-8700, CPU only)
+against the same scenarios:
+
+| approach | result |
+|---|---|
+| extractive (current) | ~20 ms, byte-identical, 100 % needle recall in the harness |
+| Qwen3.5-0.8B assist | 12-14 s per compaction, non-deterministic; with a 20 % budget the output is mostly "Thinking Process:" preamble, not facts |
+| Qwen3.5-2B assist | ~24 s, same preamble problem |
+| EmbeddingGemma-2 (`--embedding`) | ~100 short sentences/s, so ~30 s for the sentences in a 190k-token thread |
+
+Embeddings also do not behave as hoped for compaction: cosine similarity ranks
+"Caddy probe returned 200" and "Traefik probe returned 503" at 0.81 - nearly as
+close as two paraphrases of the same fact (0.92) - so semantic clustering cannot
+tell a repeated fact from a contradiction. Ranking by similarity to the task was
+noisier than the task-term TF-IDF heuristic (5/8 on-topic in the top 8 vs 8/8).
+
+Conclusion: a model buys latency and nondeterminism, not accuracy. The budget freed
+by dropping the assist section goes to the verbatim tail, which is what the agent
+actually needs.
 
 ## Deployment
 

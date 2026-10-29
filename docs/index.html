@@ -105,8 +105,9 @@
         <li>Apply per-section budgets: every section gets its own slice of MAX_SUMMARY_CHARS;
         the verbatim tail gets the largest share, and surplus items are dropped with an explicit
         omission note, so long threads never lose their tail.</li>
-        <li>Optional: add highlights from a small local model when ASSIST_ENABLED is true.
-        If the assist call fails, the section is skipped and the output stays deterministic.</li>
+        <li>Nothing in the request path calls a model. A generative assist section existed
+        and was removed: measured on CPU it added 12-24 s per compaction, broke determinism,
+        and at a 2 % budget produced mostly reasoning preamble.</li>
       </ol>
       <h3>Sections and default budgets</h3>
       <table>
@@ -119,7 +120,6 @@
         <tr><td>files</td><td>8 %</td><td>file paths mentioned by tools</td></tr>
         <tr><td>original_task</td><td>6 %</td><td>first user message</td></tr>
         <tr><td>tools</td><td>4 %</td><td>distinct tool names</td></tr>
-        <tr><td>assist</td><td>2 %</td><td>optional small-model highlights</td></tr>
       </table>
     </section>
 
@@ -158,7 +158,6 @@ curl -s localhost:8000/v1/models</pre>
         <tr><td>MAX_SUMMARY_CHARS</td><td>12000</td><td>hard cap on the summary, split per section</td></tr>
         <tr><td>TAIL_TURNS / TAIL_CHARS</td><td>6 / 600</td><td>verbatim tail: how many turns, how long each</td></tr>
         <tr><td>MAX_COMMANDS / MAX_FILES / MAX_ERRORS / MAX_KEY_POINTS</td><td>25 / 60 / 20 / 40</td><td>per-section item caps</td></tr>
-        <tr><td>ASSIST_ENABLED</td><td>false</td><td>add highlights from a small local model via ASSIST_MODEL_URL</td></tr>
       </table>
     </section>
 
@@ -171,6 +170,24 @@ curl -s localhost:8000/v1/models</pre>
       <p>Scenarios include a ~190k-token tool-heavy thread. The harness fails (non-zero exit)
       if recall drops below the threshold or a section exceeds its budget, so it doubles as a
       regression gate before deploying an update, and it runs in CI.</p>
+    </section>
+
+    <section>
+      <h2>Why not a model?</h2>
+      <p>The obvious upgrade - let a small local LLM write the summary, or use
+      embeddings to select sentences semantically - was measured on the same CPU-only
+      hardware as the service itself:</p>
+      <table>
+        <tr><th>Approach</th><th>Result</th></tr>
+        <tr><td>extractive (current)</td><td>~20 ms, byte-identical, 100 % needle recall in the harness</td></tr>
+        <tr><td>Qwen3.5-0.8B assist</td><td>12-14 s per compaction, non-deterministic; output dominated by "Thinking Process:" preamble</td></tr>
+        <tr><td>Qwen3.5-2B assist</td><td>~24 s, same preamble problem</td></tr>
+        <tr><td>EmbeddingGemma-2 embeddings</td><td>~100 short sentences/s, so ~30 s for the sentences in a 190k-token thread</td></tr>
+      </table>
+      <p>Embeddings also mis-rank: cosine similarity puts "Caddy probe returned 200"
+      and "Traefik probe returned 503" at 0.81 - almost as close as two paraphrases of
+      the same fact (0.92) - so semantic clustering cannot tell a repeated fact from a
+      contradiction.</p>
     </section>
 
     <section>

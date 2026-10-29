@@ -3,6 +3,16 @@
 All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
 
 ## 2026-10-29
+- **Generative assist removed.** The optional `ASSIST_*` path (a small local LLM
+  writing "highlights") was measured and dropped: 12-24 s of CPU latency per
+  compaction, non-deterministic output, and at a 2 % budget the model's output was
+  mostly reasoning preamble. Embeddings (EmbeddingGemma-2) were evaluated as an
+  alternative sentence selector and rejected as well (~30 s per 190k-token thread,
+  and cosine similarity cannot separate a repeated fact from a contradiction).
+  `reqwest` is no longer a dependency.
+- **Key points are now de-duplicated** (normalised, case/whitespace/punctuation
+  insensitive) so repeated tool chatter no longer eats the key-points budget.
+
 
 - **Renamed**: the project, crate, container and model id are now
   **RustySqueezer** (`rustysqueezer` for ids/tags). The repo was renamed on
@@ -18,7 +28,7 @@ All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
   The old `:python` image tag is no longer published.
 - Per-section budgeting: `MAX_SUMMARY_CHARS` is split across sections by
   `section_budgets` (tail 50 %, commands 12 %, follow-ups 10 %, key points
-  10 %, errors 8 %, files 8 %, original task 6 %, tools 4 %, assist 2 %),
+  10 %, errors 8 %, files 8 %, original task 6 %, tools 4 %),
   normalised over enabled sections. Overflow is reported as
   `(+N more ... omitted by the budget)` instead of clipping the whole summary;
   the tail is filled newest-first. Commands are clipped to 200 characters,

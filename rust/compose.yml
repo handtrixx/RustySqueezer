@@ -10,11 +10,7 @@ services:
       MODEL_NAME: rustysqueezer
       MAX_SUMMARY_CHARS: "12000"
       TAIL_TURNS: "6"
-      ASSIST_ENABLED: "false"
       # Uncomment to let a small local model add generative highlights:
-      # ASSIST_ENABLED: "true"
-      # ASSIST_MODEL_URL: http://host.docker.internal:8080/v1
-      # ASSIST_MODEL: local-small
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s

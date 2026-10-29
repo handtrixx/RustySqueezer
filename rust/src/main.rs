@@ -19,7 +19,6 @@ async fn health(State(cfg): State<Config>) -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
         "model": cfg.model,
-        "assist_enabled": cfg.assist_enabled,
         "max_summary_chars": cfg.max_summary_chars,
         "tail_turns": cfg.tail_turns,
     }))

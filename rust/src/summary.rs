@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::config::Config;
 use crate::text::{
     clip, dedup_keep_order, file_matches, has_error, is_compaction_instruction, msg_text,
-    sentence_list, term_counts,
+    dedup_normalized, sentence_list, term_counts,
 };
 
 struct Scored {
@@ -89,56 +89,6 @@ fn score_sentences(
     scored
 }
 
-async fn assist_summarize(cfg: &Config, text: &str) -> String {
-    if !cfg.assist_enabled || cfg.assist_url.is_empty() {
-        return String::new();
-    }
-    let payload = serde_json::json!({
-        "model": cfg.assist_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are a context compactor. Output terse bullet points of the most important facts, decisions, file paths, commands and results. No commentary."
-            },
-            { "role": "user", "content": clip(text, cfg.assist_max_input_chars) }
-        ],
-        "max_tokens": cfg.assist_max_tokens
-    });
-    let url = format!("{}/chat/completions", cfg.assist_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(40))
-        .build();
-    let client = match client {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-    match client.post(&url).json(&payload).send().await {
-        Ok(resp) => match resp.json::<Value>().await {
-            Ok(data) => {
-                let msg = data
-                    .get("choices")
-                    .and_then(|c| c.get(0))
-                    .and_then(|c| c.get("message"));
-                let content = msg
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let content = if content.is_empty() {
-                    msg.and_then(|m| m.get("reasoning_content"))
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("")
-                        .to_string()
-                } else {
-                    content
-                };
-                content.trim().to_string()
-            }
-            Err(_) => String::new(),
-        },
-        Err(_) => String::new(), // deterministic fallback: skip the assist section
-    }
-}
 
 /// Keep lines in order while they fit `cap` chars. Returns (kept, dropped).
 /// Deterministic greedy fill: instead of clipping the assembled summary at the
@@ -218,10 +168,7 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     // Fixed cost of the header and every section title; the rest of the budget
     // is split per section (Config::budgets). Budgeting sections up front is
     // what keeps the verbatim tail from being clipped away on long threads.
-    let mut enabled: Vec<String> = cfg.sections.clone();
-    if cfg.assist_enabled {
-        enabled.push("assist".to_string());
-    }
+    let enabled: Vec<String> = cfg.sections.clone();
     let mut overhead = cfg.title("header").chars().count() + 4;
     if !instruction.is_empty() {
         overhead += cfg.title("note").chars().count() + 4;
@@ -343,6 +290,9 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         .iter()
         .flat_map(|m| sentence_list(&msg_text(m)))
         .collect();
+    // Repeated tool chatter would otherwise fill the key-points budget with
+    // the same sentence ten times.
+    let all_sents = dedup_normalized(&all_sents);
     let mut key = score_sentences(&all_sents, &task_terms, 2.0, cfg);
     // Order by score descending, then text descending, so ties are stable
     // and the output is reproducible.
@@ -401,20 +351,6 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
             cfg.title("tail"),
             body.join("\n\n")
         ));
-    }
-    if cfg.assist_enabled {
-        let joined: Vec<String> = thread.iter().map(|m| msg_text(m)).collect();
-        let assist = assist_summarize(cfg, &joined.join("\n")).await;
-        if !assist.is_empty() {
-            parts.push(format!(
-                "\n## {}\n{}",
-                cfg.title("assist"),
-                clip(
-                    &assist,
-                    cfg.section_cap("assist", content_budget, total_share),
-                )
-            ));
-        }
     }
     // Sections are budgeted individually, so this is only a safety net for a
     // misconfigured section_budgets map (shares summing to more than 100).

@@ -28,8 +28,7 @@
     "errors": 8,
     "files": 8,
     "original_task": 6,
-    "tools": 4,
-    "assist": 2
+    "tools": 4
   },
   "section_titles": {
     "header": "Conversation summary (deterministic compaction by rustysqueezer)",
@@ -41,7 +40,6 @@
     "tools": "Tools used",
     "errors": "Errors / problems seen",
     "key_points": "Key points from the assistant",
-    "tail": "Most recent turns (verbatim, clipped)",
-    "assist": "Small-model highlights"
+    "tail": "Most recent turns (verbatim, clipped)"
   }
 }
