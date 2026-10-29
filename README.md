@@ -200,7 +200,7 @@ uses the binary itself (`/rustysqueezer --health`).
 ~3.5 MB and starts instantly.
 
 ```bash
-docker run -d -p 8000:8000 -e MAX_SUMMARY_CHARS=12000 ghcr.io/handtrixx/rustysqueezer:latest
+docker run -d -p 8000:8000 -e MAX_SUMMARY_CHARS=12000 ghcr.io/handtrixx/rustysqueezer:1.0.3
 ```
 
 ## Wiring it into an agent
@@ -278,6 +278,23 @@ Layout: `rust/src/main.rs` (axum routes), `rust/src/summary.rs` (the compactor),
 5. ~~Per-section budgeting~~ - done 2026-10-29.
 6. ~~Anthropic Messages API and Ollama native surface~~ - done 2026-10-29 (v1.0.2).
 7. Quality tuning against real agent threads (the harness makes this measurable).
+
+Production hardening (from the 2026-10-29 readiness audit, in priority order):
+
+8. Raise the request body limit. Axum's default is 2 MiB, so large threads get
+   a `413 Failed to buffer the request body`; a ~190k-token Zed thread is about
+   1.2 MB, so the headroom is thin. Fix: `BodyLimit::max(32 * 1024 * 1024)`.
+9. Per-request logging of input/output tokens and latency, so usage and
+   compression quality are observable instead of invisible.
+10. Graceful shutdown (`with_graceful_shutdown` on a signal) so `docker stop`
+   does not abort in-flight compactions.
+11. Run `cargo test` in CI - nine unit tests exist but are never executed on
+   push.
+12. Resource limits (CPU/memory) in the deployment compose file.
+13. Wire it into an agent for real: point the harness's compaction/summary
+   model at the `rustysqueezer` gateway model once its output quality is
+   accepted on real threads. Note that summaries are extractive bullet facts,
+   not narrative prose.
 
 ## License
 
