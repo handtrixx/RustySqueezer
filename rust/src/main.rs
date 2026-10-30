@@ -3,13 +3,14 @@ mod summary;
 mod text;
 
 use axum::{
-    extract::{Json, State},
+    extract::{DefaultBodyLimit, Json, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use serde_json::Value;
+use std::time::{Duration, Instant};
 
 use config::Config;
 use summary::build_summary;
@@ -28,6 +29,20 @@ async fn models(State(cfg): State<Config>) -> impl IntoResponse {
     Json(serde_json::json!({"object": "list", "data": [{"id": cfg.model, "object": "model"}]}))
 }
 
+// Per-request observability: surface, input/output tokens, compression
+// ratio and latency, so usage and quality are visible in container logs.
+fn log_usage(surface: &str, in_tokens: usize, out_tokens: usize, elapsed: Duration) {
+    let ratio = if out_tokens > 0 {
+        in_tokens as f64 / out_tokens as f64
+    } else {
+        0.0
+    };
+    println!(
+        "[usage] {surface} in={in_tokens} out={out_tokens} ratio={ratio:.1} latency_ms={}",
+        elapsed.as_millis()
+    );
+}
+
 fn thread_from_body(body: &Value) -> Vec<Value> {
     body.get("messages")
         .and_then(|m| m.as_array())
@@ -36,6 +51,7 @@ fn thread_from_body(body: &Value) -> Vec<Value> {
 }
 
 async fn completions(State(cfg): State<Config>, Json(body): Json<Value>) -> Response {
+    let started = Instant::now();
     let messages = thread_from_body(&body);
     let stream = body
         .get("stream")
@@ -51,6 +67,8 @@ async fn completions(State(cfg): State<Config>, Json(body): Json<Value>) -> Resp
         "completion_tokens": completion_tokens,
         "total_tokens": prompt_tokens + completion_tokens,
     });
+
+    log_usage("openai", prompt_tokens, completion_tokens, started.elapsed());
 
     if !stream {
         return Json(serde_json::json!({
@@ -122,6 +140,7 @@ fn self_health(port: u16) -> i32 {
 // content may be a string or an array of text blocks (already handled by
 // msg_text). The compaction logic is identical to the OpenAI surface.
 async fn anthropic_messages(State(cfg): State<Config>, Json(body): Json<Value>) -> Response {
+    let started = Instant::now();
     let mut messages = thread_from_body(&body);
     if let Some(system) = body.get("system").and_then(|s| s.as_str()) {
         messages.insert(0, serde_json::json!({"role": "system", "content": system}));
@@ -129,6 +148,7 @@ async fn anthropic_messages(State(cfg): State<Config>, Json(body): Json<Value>) 
     let summary = build_summary(&messages, &cfg).await;
     let input_tokens: usize = messages.iter().map(|m| count_tokens(&msg_text(m))).sum();
     let output_tokens = count_tokens(&summary);
+    log_usage("anthropic", input_tokens, output_tokens, started.elapsed());
     let model = body
         .get("model")
         .and_then(|m| m.as_str())
@@ -182,10 +202,12 @@ async fn anthropic_messages(State(cfg): State<Config>, Json(body): Json<Value>) 
 // (single prompt), plus GET /api/tags for model discovery. Streaming uses
 // Ollama's NDJSON format: one JSON object per line, final line with done.
 async fn ollama_chat(State(cfg): State<Config>, Json(body): Json<Value>) -> Response {
+    let started = Instant::now();
     let messages = thread_from_body(&body);
     let summary = build_summary(&messages, &cfg).await;
     let prompt_tokens: usize = messages.iter().map(|m| count_tokens(&msg_text(m))).sum();
     let eval_count = count_tokens(&summary);
+    log_usage("ollama-chat", prompt_tokens, eval_count, started.elapsed());
     let model = body
         .get("model")
         .and_then(|m| m.as_str())
@@ -229,6 +251,7 @@ async fn ollama_chat(State(cfg): State<Config>, Json(body): Json<Value>) -> Resp
 }
 
 async fn ollama_generate(State(cfg): State<Config>, Json(body): Json<Value>) -> Response {
+    let started = Instant::now();
     let prompt = body
         .get("prompt")
         .and_then(|p| p.as_str())
@@ -239,13 +262,16 @@ async fn ollama_generate(State(cfg): State<Config>, Json(body): Json<Value>) -> 
         .get("model")
         .and_then(|m| m.as_str())
         .unwrap_or(cfg.model.as_str());
+    let in_tokens = count_tokens(prompt);
+    let out_tokens = count_tokens(&summary);
+    log_usage("ollama-generate", in_tokens, out_tokens, started.elapsed());
     Json(serde_json::json!({
         "model": model,
         "created_at": chrono_like_now(),
         "response": summary,
         "done": true,
-        "prompt_eval_count": count_tokens(prompt),
-        "eval_count": count_tokens(&summary),
+        "prompt_eval_count": in_tokens,
+        "eval_count": out_tokens,
     }))
     .into_response()
 }
@@ -254,6 +280,29 @@ async fn ollama_tags(State(cfg): State<Config>) -> impl IntoResponse {
     Json(serde_json::json!({
         "models": [{"name": cfg.model, "size": 0, "modified": "now"}]
     }))
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.ok();
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    println!("shutdown signal received, draining in-flight requests");
 }
 
 #[tokio::main]
@@ -276,10 +325,16 @@ async fn main() {
         .route("/api/chat", post(ollama_chat))
         .route("/api/generate", post(ollama_generate))
         .route("/api/tags", get(ollama_tags))
+        // Default 2 MiB is too tight: a ~190k-token Zed thread is ~1.2 MB,
+        // so large agent threads 413'd. Allow 32 MiB.
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(cfg);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     println!("rustysqueezer listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
 }

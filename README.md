@@ -281,15 +281,15 @@ Layout: `rust/src/main.rs` (axum routes), `rust/src/summary.rs` (the compactor),
 
 Production hardening (from the 2026-10-29 readiness audit, in priority order):
 
-8. Raise the request body limit. Axum's default is 2 MiB, so large threads get
-   a `413 Failed to buffer the request body`; a ~190k-token Zed thread is about
-   1.2 MB, so the headroom is thin. Fix: `BodyLimit::max(32 * 1024 * 1024)`.
-9. Per-request logging of input/output tokens and latency, so usage and
-   compression quality are observable instead of invisible.
-10. Graceful shutdown (`with_graceful_shutdown` on a signal) so `docker stop`
-   does not abort in-flight compactions.
-11. Run `cargo test` in CI - nine unit tests exist but are never executed on
-   push.
+8. ~~Raise the request body limit~~ - done 2026-10-30 (v1.0.4):
+   `DefaultBodyLimit::max(32 * 1024 * 1024)`; the 2 MiB Axum default 413'd
+   large threads (a ~190k-token Zed thread is about 1.2 MB).
+9. ~~Per-request logging~~ - done 2026-10-30 (v1.0.4): every request logs
+   surface, input/output tokens, compression ratio and latency.
+10. ~~Graceful shutdown~~ - done 2026-10-30 (v1.0.4): SIGINT/SIGTERM drains
+   in-flight compactions before exit.
+11. ~~Run `cargo test` in CI~~ - done 2026-10-30 (v1.0.4) on the pinned
+   `rust:1.99-alpine` toolchain.
 12. Resource limits (CPU/memory) in the deployment compose file.
 13. Wire it into an agent for real: point the harness's compaction/summary
    model at the `rustysqueezer` gateway model once its output quality is

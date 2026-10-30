@@ -6,6 +6,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  unit-tests:
+    # Run the crate's unit tests on the same pinned toolchain as the build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo test (rust:1.99-alpine)
+        run: docker run --rm -v "$PWD/rust:/rust" -w /rust rust:1.99-alpine cargo test
+
   eval:
     # Build the Rust binary and run the compaction harness against it: needle
     # recall, determinism, compression ratio and the per-section budget.

@@ -1,8 +1,18 @@
 # Changelog
 
-All notable changes to `rustysqueezer`. Dates are the commit dates on `main`.
+All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
-## v1.0.3 - 2026-10-29
+## v1.0.4 - 2026-10-30
+- **32 MiB request body limit** (`DefaultBodyLimit::max`): the Axum default
+  2 MiB rejected large agent threads with `413 Failed to buffer request body`.
+- **Graceful shutdown** (`with_graceful_shutdown` on SIGINT/SIGTERM): `docker
+  stop` now drains in-flight compactions instead of aborting them.
+- **Per-request usage logging**: every compaction logs surface, input/output
+  token counts, compression ratio and latency to stdout.
+- **Unit tests run in CI** (`cargo test` in the pinned `rust:1.99-alpine`
+  toolchain on every push).
+
+## v1.0.2 - 2026-10-29
 Reliability pass driven by a real Zed compaction transcript
 (`eval/real_thread.py --transcript test.md`):
 - **Tool results feed the key-point pool.** Raw tool output is the ground
