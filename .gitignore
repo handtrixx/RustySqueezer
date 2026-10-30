@@ -6,3 +6,5 @@ __pycache__/
 docker-compose.override.yml
 push_helper.py
 rust/target/
+_site/
+__pycache__/
