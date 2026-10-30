@@ -1,0 +1,86 @@
+site_name: RustySqueezer
+site_description: A fake LLM for context compaction - deterministic, extractive summaries of agent threads with no model and no network.
+site_author: Niklas Handtrixx
+site_url: https://handtrixx.github.io/RustySqueezer/
+
+repo_url: https://github.com/handtrixx/RustySqueezer
+repo_name: handtrixx/RustySqueezer
+
+theme:
+  name: material
+  logo: rustysqueezer.png
+  favicon: rustysqueezer.png
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mermaid.min.js
+  - javascripts/mermaid-init.js
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - def_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Integrations:
+      - Zed: integrations/zed.md
+      - LiteLLM: integrations/litellm.md
+      - VS Code: integrations/vscode.md
+      - OpenCode: integrations/opencode.md
+  - Guide:
+      - Configuration: configuration.md
+      - Evaluation: evaluation.md
+      - FAQ: faq.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/handtrixx/RustySqueezer

@@ -23,8 +23,11 @@ agent ──► POST /v1/chat/completions ──► structured summary (~5-10% o
 
 Full documentation and integration guides (Zed, LiteLLM, VS Code/Copilot, OpenCode) live on the website:
 
-- [https://handtrixx.github.io/RustySqueezer/](https://handtrixx.github.io/RustySqueezer/) - overview
-- [https://handtrixx.github.io/RustySqueezer/docs/integrations.html](https://handtrixx.github.io/RustySqueezer/docs/integrations.html) - integration docs (Zed, LiteLLM, VS Code, OpenCode)
+- [https://handtrixx.github.io/RustySqueezer/](https://handtrixx.github.io/RustySqueezer/) - overview and quick start
+- [https://handtrixx.github.io/RustySqueezer/integrations/zed/](https://handtrixx.github.io/RustySqueezer/integrations/zed/) - Zed
+- [https://handtrixx.github.io/RustySqueezer/integrations/litellm/](https://handtrixx.github.io/RustySqueezer/integrations/litellm/) - LiteLLM gateway
+- [https://handtrixx.github.io/RustySqueezer/integrations/vscode/](https://handtrixx.github.io/RustySqueezer/integrations/vscode/) - VS Code / Copilot
+- [https://handtrixx.github.io/RustySqueezer/integrations/opencode/](https://handtrixx.github.io/RustySqueezer/integrations/opencode/) - OpenCode
 
 ## Why this exists
 

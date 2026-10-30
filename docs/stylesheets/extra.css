@@ -1,0 +1,101 @@
+/* RustySqueezer brand tokens: near-black surfaces + cyan accent, in the
+   style of modern AI tooling sites. Light scheme stays paper-white. */
+
+:root,
+[data-md-color-scheme="default"] {
+  --rs-ink: #05070a;
+  --rs-surface: #ffffff;
+  --rs-surface-2: #f1f4f8;
+  --rs-muted: #5a6675;
+  --rs-accent: #0b7c66;
+  --md-text-font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --md-code-font-family: "JetBrains Mono", "Roboto Mono", monospace;
+  --md-primary-fg-color: #0b7c66;
+  --md-accent-fg-color: #0b7c66;
+  --md-default-bg-color: #ffffff;
+  --md-default-fg-color: #05070a;
+  --md-code-bg-color: #f1f4f8;
+}
+
+[data-md-color-scheme="slate"] {
+  --rs-ink: #e7edf5;
+  --rs-surface: #05070a;
+  --rs-surface-2: #0c1118;
+  --rs-muted: #98a4b3;
+  --rs-accent: #65d8ff;
+  --md-text-font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --md-code-font-family: "JetBrains Mono", "Roboto Mono", monospace;
+  --md-primary-fg-color: #0c1118;
+  --md-primary-fg-color--light: #141b24;
+  --md-primary-fg-color--dark: #05070a;
+  --md-accent-fg-color: #65d8ff;
+  --md-default-bg-color: #05070a;
+  --md-default-fg-color: #e7edf5;
+  --md-default-fg-color--light: #98a4b3;
+  --md-typeset-a-color: #65d8ff;
+  --md-code-bg-color: #0c1118;
+  --md-code-fg-color: #e7edf5;
+}
+
+/* Hero ---------------------------------------------------------------------- */
+.md-typeset h1 {
+  margin-bottom: 0.25rem;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+.md-typeset .tagline {
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--rs-muted);
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+}
+
+.md-typeset .eyebrow {
+  font-family: var(--md-code-font-family);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--rs-accent);
+  margin-bottom: 0.5rem;
+}
+
+.md-typeset .md-button {
+  border-radius: 0.5rem;
+  padding: 0.55rem 1.1rem;
+  color: var(--rs-ink);
+}
+
+.md-typeset .md-button--primary {
+  background-color: var(--rs-accent);
+  border-color: var(--rs-accent);
+  color: #05070a;
+}
+
+/* Terminal blocks ------------------------------------------------------------- */
+.md-typeset pre.term {
+  background: var(--rs-surface-2);
+  border: 1px solid rgba(127, 138, 153, 0.25);
+  border-radius: 0.6rem;
+  padding: 1rem 1.25rem;
+}
+
+/* Cards --------------------------------------------------------------------- */
+.md-typeset .rs-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+
+.md-typeset .rs-card {
+  border: 1px solid rgba(127, 138, 153, 0.22);
+  border-radius: 0.6rem;
+  background: var(--rs-surface-2);
+  padding: 0.9rem 1.1rem;
+  line-height: 1.5;
+}
+
+.md-typeset .rs-card p { margin: 0; }
+.md-typeset .rs-card p:first-child { font-weight: 600; margin-bottom: 0.35rem; }
