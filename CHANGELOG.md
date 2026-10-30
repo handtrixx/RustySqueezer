@@ -2,6 +2,17 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.0.5 - 2026-10-30
+- **1M-token sessions verified.** Request body limit widened from 32 MiB to
+  64 MiB; a 1,004,041-token thread (6.1 MB of JSON) compacts in ~0.1 s inside
+  the container and ~17 s through the LiteLLM gateway, with needle recall and
+  determinism intact. Covered by a `million-token` eval scenario and a unit
+  test, both in CI.
+- Roadmap item 12 (resource limits in the deployment compose) dropped: the
+  compactor is stateless and stays around 4 MB RSS even while serving six
+  concurrent 1M-token requests, so CPU/memory caps in the deploy compose were
+  judged unnecessary.
+
 ## v1.0.4 - 2026-10-30
 - **32 MiB request body limit** (`DefaultBodyLimit::max`): the Axum default
   2 MiB rejected large agent threads with `413 Failed to buffer request body`.

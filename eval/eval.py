@@ -289,6 +289,51 @@ def scenario_long_realistic():
     return "long-realistic", msgs, needles, 0.15
 
 
+def scenario_million_token():
+    """A ~1M-token session: the largest input LiteLLM declares for this model.
+
+    Guards the request body limit (Axum's 2 MiB default 413'd big threads) and
+    checks the compactor still stays inside the char budget and is
+deterministic at that scale."""
+    filler = "probe heartbeat log line alpha beta gamma delta " * 125
+    msgs = [
+        {
+            "role": "user",
+            "content": "needle-million-task: verify compaction handles a one-million-token session",
+        }
+    ]
+    for i in range(1000):
+        msgs.append({"role": "tool", "content": f"probe {i} output:\n{filler}"})
+    msgs.append(
+        {
+            "role": "assistant",
+            "content": "needle-million-final: last turn before compaction, deployment healthy",
+            "tool_calls": [
+                {
+                    "id": "t9",
+                    "type": "function",
+                    "function": {
+                        "name": "terminal",
+                        "arguments": json.dumps({"command": "curl -fsS http://127.0.0.1:8000/health"}),
+                    },
+                }
+            ],
+        }
+    )
+    msgs.append(
+        {
+            "role": "user",
+            "content": "Please summarize the conversation so far so the agent can continue.",
+        }
+    )
+    needles = [
+        "needle-million-task",
+        "needle-million-final",
+        "curl -fsS http://127.0.0.1:8000/health",
+    ]
+    return "million-token", msgs, needles, 0.02
+
+
 def run_scenario(url, model, name, messages, needles, threshold, max_ratio=None, cap=None):
     summary, usage = call_compactor(url, model, messages)
     summary2, _ = call_compactor(url, model, messages)
@@ -333,6 +378,8 @@ def main():
     ):
         all_ok &= run_scenario(args.url, args.model, name, messages, needles, args.threshold, cap=cap)
     name, messages, needles, max_ratio = scenario_long_realistic()
+    all_ok &= run_scenario(args.url, args.model, name, messages, needles, args.threshold, max_ratio, cap)
+    name, messages, needles, max_ratio = scenario_million_token()
     all_ok &= run_scenario(args.url, args.model, name, messages, needles, args.threshold, max_ratio, cap)
 
     print("RESULT:", "PASS" if all_ok else "FAIL")

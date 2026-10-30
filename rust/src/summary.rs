@@ -640,6 +640,53 @@ mod tests {
         assert!(s.contains("## Most recent turns"));
     }
 
+    #[tokio::test]
+    async fn million_token_thread_is_compacted() {
+        use crate::text::count_tokens;
+        let cfg = Config::from_env();
+        // ~1M tokens, the largest input LiteLLM declares for this model. The
+        // compactor is linear over the thread, so a 1M-token session must be
+        // accepted (no 413), stay within the output budget and remain
+        // deterministic.
+        let filler = "probe heartbeat log line alpha beta gamma delta ".repeat(125);
+        let mut thread: Vec<Value> = vec![json!({
+            "role": "user",
+            "content": "needle-million-task: verify compaction handles a one-million-token session",
+        })];
+        for i in 0..1000 {
+            thread.push(json!({
+                "role": "tool",
+                "content": format!("probe {i} output:\n{filler}"),
+            }));
+        }
+        thread.push(json!({
+            "role": "assistant",
+            "content": "needle-million-final: last turn before compaction, deployment healthy",
+            "tool_calls": [
+                {
+                    "id": "t9",
+                    "type": "function",
+                    "function": {
+                        "name": "terminal",
+                        "arguments": "{\"command\": \"curl -fsS http://127.0.0.1:8000/health\"}",
+                    },
+                }
+            ],
+        }));
+        thread.push(json!({
+            "role": "user",
+            "content": "Please summarize the conversation so far so the agent can continue.",
+        }));
+        let tokens: usize = thread.iter().map(|m| count_tokens(&msg_text(m))).sum();
+        assert!(tokens >= 1_000_000, "thread is only {tokens} tokens");
+        let first = build_summary(&thread, &cfg).await;
+        let second = build_summary(&thread, &cfg).await;
+        assert_eq!(first, second, "compaction must stay deterministic on huge threads");
+        assert!(first.chars().count() <= cfg.max_summary_chars);
+        assert!(first.contains("needle-million-task"));
+        assert!(first.contains("needle-million-final"));
+    }
+
     #[test]
     fn clip_behaviour() {
         assert_eq!(clip("  hello  ", 10), "hello");

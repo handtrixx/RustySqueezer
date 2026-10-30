@@ -326,8 +326,9 @@ async fn main() {
         .route("/api/generate", post(ollama_generate))
         .route("/api/tags", get(ollama_tags))
         // Default 2 MiB is too tight: a ~190k-token Zed thread is ~1.2 MB,
-        // so large agent threads 413'd. Allow 32 MiB.
-        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
+        // so large agent threads 413'd. 64 MiB leaves comfortable headroom for
+        // a 1M-token session (roughly 6-8 MB of thread text in practice).
+        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(cfg);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
