@@ -19,6 +19,13 @@ evaluated (see [Evaluation](#evaluation)).
 agent ──► POST /v1/chat/completions ──► structured summary (~5-10% of the thread)
 ```
 
+## Documentation
+
+Full documentation and integration guides (Zed, LiteLLM, VS Code/Copilot, OpenCode) live on the website:
+
+- [https://handtrixx.github.io/RustySqueezer/](https://handtrixx.github.io/RustySqueezer/) - overview
+- [https://handtrixx.github.io/RustySqueezer/docs/integrations.html](https://handtrixx.github.io/RustySqueezer/docs/integrations.html) - integration docs (Zed, LiteLLM, VS Code, OpenCode)
+
 ## Why this exists
 
 Agents compact a long thread by sending the *whole* thread to a summarising

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RustySqueezer - Documentation and Integrations</title>
+  <meta name="description" content="Integration guides for RustySqueezer: Zed, LiteLLM, VS Code Copilot and OpenCode.">
+  <link rel="icon" type="image/png" href="rustysqueezer.png">
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style>
+    [data-theme="light"] {
+      --color-primary: #006d5b;
+      --color-primary-content: #ffffff;
+      --color-secondary: #4a6359;
+      --color-secondary-content: #ffffff;
+      --color-accent: #6a5d76;
+      --color-neutral: #333936;
+      --color-base-100: #f6fbf8;
+      --color-base-200: #e6ede8;
+      --color-base-300: #d5e0da;
+      --color-base-content: #19211d;
+      --radius: 1rem;
+    }
+    [data-theme="dark"] {
+      --color-primary: #6cc9b4;
+      --color-primary-content: #00382e;
+      --color-secondary: #9fcbbb;
+      --color-secondary-content: #1f3a30;
+      --color-accent: #c2b3d0;
+      --color-neutral: #c9d2cd;
+      --color-base-100: #111613;
+      --color-base-200: #1b211e;
+      --color-base-300: #262d29;
+      --color-base-content: #dce5e1;
+      --radius: 1rem;
+    }
+    pre {
+      background: var(--color-base-200);
+      border: 1px solid var(--color-base-300);
+      border-radius: var(--radius);
+      padding: 1rem;
+      overflow-x: auto;
+      font-size: 0.875rem;
+    }
+    code {
+      background: var(--color-base-200);
+      border-radius: 0.375rem;
+      padding: 0.15rem 0.4rem;
+      font-size: 0.875rem;
+    }
+    pre code { background: none; padding: 0; }
+    .callout {
+      border-left: 4px solid var(--color-primary);
+      background: var(--color-base-200);
+      border-radius: 0.5rem;
+      padding: 0.75rem 1rem;
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-base-100 text-base-content">
+
+  <div class="navbar base-200 border-b border-base-300 sticky top-0 z-10">
+    <div class="navbar-start">
+      <a href="index.html" class="flex items-center gap-3">
+        <img src="rustysqueezer.png" alt="RustySqueezer logo" class="w-9 h-9 rounded-full">
+        <span class="font-bold">RustySqueezer</span>
+      </a>
+    </div>
+    <div class="navbar-end flex-wrap gap-2">
+      <a href="index.html" class="btn btn-ghost btn-sm">Home</a>
+      <a href="https://github.com/handtrixx/RustySqueezer" class="btn btn-ghost btn-sm">GitHub</a>
+      <a href="https://github.com/handtrixx/RustySqueezer/blob/main/README.md" class="btn btn-ghost btn-sm">README</a>
+      <a href="https://ghcr.io/handtrixx/rustysqueezer" class="btn btn-ghost btn-sm">Image</a>
+      <button class="btn btn-ghost btn-sm btn-circle" id="mode-toggle" aria-label="Toggle dark mode">
+        <svg id="mode-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <main class="max-w-6xl mx-auto px-4 pb-16">
+
+    <h1 class="text-3xl font-semibold mt-8">Documentation</h1>
+    <p class="text-base-content/60 mt-1">How RustySqueezer slots into real agents: it looks like a chat model, so every harness that can pick a summariser, or route through an AI gateway, can use it for compaction.</p>
+
+    <div class="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6 mt-8">
+      <nav class="menu bg-base-200 rounded-box lg:sticky lg:top-72 self-start text-sm">
+        <li><a href="#quick-start">Quick start</a></li>
+        <li><a href="#overview">Integration overview</a></li>
+        <li><a href="#zed">Zed</a></li>
+        <li><a href="#litellm">LiteLLM</a></li>
+        <li><a href="#vscode">VS Code / Copilot</a></li>
+        <li><a href="#opencode">OpenCode</a></li>
+        <li><a href="#tuning">Tuning the heuristics</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </nav>
+
+      <div>
+
+        <h2 id="quick-start" class="text-2xl font-semibold mt-8">Quick start</h2>
+        <pre>docker run -d -p 8000:8000 ghcr.io/handtrixx/rustysqueezer:latest
+curl -s localhost:8000/health</pre>
+        <p class="text-sm mt-3">Endpoints: OpenAI <code>POST /v1/chat/completions</code>, Anthropic <code>POST /v1/messages</code> (including native compaction blocks), Ollama <code>POST /api/chat</code> and <code>POST /api/generate</code>, plus <code>GET /health</code> and model discovery. No auth, no model, no network: bodies up to 64 MiB (a roughly 1M-token thread) compact in well under a second.</p>
+
+        <h2 id="overview" class="text-2xl font-semibold mt-10">Integration overview</h2>
+        <div class="callout mt-3">Two ways to use RustySqueezer: <strong>client-side</strong> - the agent has a compaction-model setting and you point it at RustySqueezer; or <strong>gateway-side</strong> - LiteLLM's auto-router compacts the thread before dispatch, which works for clients with no compaction setting at all (VS Code).</div>
+        <table class="table table-sm mt-4">
+          <thead><tr><th>Client</th><th>Compaction knob</th><th>Method</th></tr></thead>
+          <tbody>
+            <tr><td>Zed</td><td>agent.compaction_model, agent.thread_summary_model</td><td>client-side</td></tr>
+            <tr><td>LiteLLM gateway</td><td>auto-router context_compaction</td><td>gateway-side</td></tr>
+            <tr><td>VS Code Copilot</td><td>none built-in</td><td>gateway-side via LiteLLM</td></tr>
+            <tr><td>OpenCode</td><td>agents.compaction.model</td><td>client-side</td></tr>
+            <tr><td>Ollama-aware agents</td><td>point /api/chat directly</td><td>client-side, gateway</td></tr>
+            </tbody>
+            </table>
+
+            <h2 id="zed" class="text-2xl font-semibold mt-10">Zed</h2>
+            <p class="text-sm mt-3">Zed lets you name an explicit compaction model for the agent. Declare RustySqueezer as an OpenAI-compatible provider with a large declared context window, then point both compaction settings at it.</p>
+            <div class="card bg-base-200 rounded-2xl box-shadow mt-4">
+              <div class="card-body">
+                <pre>{
+              "language_servers": [],
+              "agent": {
+                "compaction_model": "rustysqueezer",
+                "thread_summary_model": "rustysqueezer"
+              }
+            }</pre>
+                <p class="text-sm mt-3">The provider itself goes in the models section of <code>settings.json</code>:</p>
+                <pre>{
+              "openai_compatible": {
+                "rustysqueezer": {
+                  "base_url": "http://localhost:8000/v1",
+                  "api_key": "none",
+                  "max_tokens": 1000000
+                }
+              }
+            }</pre>
+              </div>
+            </div>
+            <div class="callout mt-4">
+              <p class="text-sm"><strong>Why a big <code>max_tokens</code>:</strong> compaction fires when the thread approaches the window Zed believes the model has. Declaring 1M tokens lets whole long sessions reach RustySqueezer in one request (it accepts bodies up to 64 MiB), which is exactly what you want from a summarizer.</p>
+            </div>
+
+<h2 id="litellm" class="text-2xl font-semibold mt-10">LiteLLM gateway</h2>
+<p class="text-sm mt-3">LiteLLM plays two roles here. You can call RustySqueezer as a plain model through the gateway, or let the gateway itself compact the thread before dispatching to a real model - useful for clients that have no compaction setting of their own.</p>
+<div class="card bg-base-200 rounded-2xl box-shadow mt-4">
+  <div class="card-body">
+    <h3 class="card-title text-lg">1. RustySqueezer as a model</h3>
+    <pre>model:
+  - model: "openai/rustysqueezer"
+    api_base: "http://rustysqueezer:8000/v1"
+    max_input_tokens: 1000000
+    max_output_tokens: 4096</pre>
+    <p class="text-sm mt-3">Point any LiteLLM client at <code>rustysqueezer</code> to use it as the summarizer directly (the analogue of Zed's <code>agent.compaction_model</code>).</p>
+  </div>
+</div>
+<div class="card bg-base-200 rounded-2xl box-shadow mt-4">
+  <div class="card-body">
+    <h3 class="card-title text-lg">2. Gateway-side automatic compaction</h3>
+    <p class="text-sm">LiteLLM's auto-router supports native context management: when an incoming thread approaches the declared window, it summarizes the old turns with a chosen compactor model before forwarding the trimmed request to the target model.</p>
+    <pre>model:
+  - model: "anthropic/claude-sonnet-5"
+    max_input_tokens: 200000
+
+router:
+  auto_router:
+    complexity_router:
+      context_compaction:
+        model: "rusty-compactor"
+        trigger_ratio: 0.9
+        max_tokens: 4096
+        timeout_seconds: 120
+
+model:
+  - model: "rusty-compactor"
+    alias: "rusty-compactor"
+    api_base: "http://rustysqueezer:8000/v1"
+    max_input_tokens: 1000000</pre>
+    <p class="text-sm mt-3">The compaction trigger is <code>floor(max_input_tokens x trigger_ratio) - max_output_tokens</code>. With a 200k window and ratio 0.9, threads above roughly 176k tokens get compacted before the real model sees them.</p>
+  </div>
+</div>
+<div class="callout mt-4">
+  <p class="text-sm"><strong>Gotcha (verified 2026-10-30):</strong> if the summary plus the retained tail still exceed the router's budget, LiteLLM raises a 400 <code>ContextWindowExceededError</code>. Keep <code>max_tokens</code> in the compaction block comfortably below the target window, and use RustySqueezer 1.0.6 or newer, which handles very large inbound threads (up to 64 MiB) reliably.</p>
+</div>
+
+<h2 id="vscode" class="text-2xl font-semibold mt-10">VS Code (GitHub Copilot)</h2>
+<p class="text-sm mt-3">Copilot has no user-settable compaction model - the agent decides compaction internally. So the gateway route is the way: run LiteLLM in front of RustySqueezer and point Copilot at LiteLLM as a custom OpenAI-compatible provider.</p>
+<div class="card bg-base-200 rounded-2xl box-shadow mt-4">
+  <div class="card-body">
+    <ol class="list decimal text-sm">
+      <li>Configure LiteLLM as in the LiteLLM section: a router alias with an honest (or deliberately large) declared window, and <code>context_compaction</code> on the auto-router with <code>rusty-compactor</code> as the compactor.</li>
+      <li>In VS Code set <code>github.copilot.chat.customOAICompatibleEndpoint</code> (or the Copilot "models" provider settings) to your LiteLLM base URL.</li>
+      <li>Copilot sends full threads to LiteLLM; LiteLLM compacts anything over the trigger and forwards a trimmed thread to the real model.</li>
+    </ol>
+  </div>
+</div>
+<div class="callout mt-4">
+  <p class="text-sm"><strong>Why it works:</strong> compaction becomes invisible to the client. Any tool that speaks OpenAI chat completions through a gateway - VS Code, OpenCode without native compaction, internal scripts - benefits without a per-client setting.</p>
+</div>
+
+<h2 id="opencode" class="text-2xl font-semibold mt-10">OpenCode</h2>
+<p class="text-sm mt-3">OpenCode supports a native compaction model (the same idea as Zed's <code>agent.compaction_model</code>), so you can point it at RustySqueezer directly, or route through LiteLLM for gateway-side compaction.</p>
+<div class="card bg-base-200 rounded-2xl box-shadow mt-4">
+  <div class="card-body">
+    <h3 class="card-title text-lg">Native compaction model</h3>
+    <pre>{
+  "agents": {
+    "general": {
+      "compaction": {
+        "model": "litellm/rustysqueezer"
+      }
+    }
+  }
+}</pre>
+    <p class="text-sm mt-3">With the provider declared via the OpenAI-compatible SDK:</p>
+    <pre>{
+  "provider": {
+    "litellm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "baseURL": "http://localhost:4000/v1",
+      "models": {
+        "rustysqueezer": {
+          "name": "RustySqueezer",
+          "limit": { "context": 1000000, "output": 4096 }
+        }
+      }
+    }
+  }
+}</pre>
+  </div>
+</div>
+<div class="callout mt-4">
+  <p class="text-sm"><strong>Note:</strong> OpenCode's compactor sends its own summarization instructions with the thread. RustySqueezer is extractive and deterministic, so it works, but adding OpenCode's instruction wording to the <code>instruction_patterns</code> list (via <code>CONFIG_PATH</code>) gives cleaner summaries. Its <code>"type": "native"</code> Responses-API context management is OpenAI-specific and does not apply here.</p>
+</div>
+
+<h2 id="tuning" class="text-2xl font-semibold mt-10">Tuning the heuristics</h2>
+<p class="text-sm mt-3">RustySqueezer's extraction rules are tunable without recompiling: mount a JSON config via <code>CONFIG_PATH</code> (see <code>config.example.json</code> in the repo) or override the individual knobs with environment variables.</p>
+<div class="card bg-base-200 rounded-2xl box-shadow mt-4">
+  <div class="card-body">
+    <table class="table table-sm">
+      <thead><tr><th>Env var</th><th>Default-ish meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>MODEL_NAME</code></td><td>Reported model id for discovery endpoints</td></tr>
+        <tr><td><code>MAX_SUMMARY_CHARS</code></td><td>Cap on the generated summary</td></tr>
+        <tr><td><code>TAIL_TURNS</code> / <code>TAIL_CHARS</code></td><td>How many recent turns (or chars) are kept verbatim</td></tr>
+        <tr><td><code>MAX_COMMANDS</code></td><td>Shell commands kept from the thread</td></tr>
+        <tr><td><code>MAX_FILES</code></td><td>File paths / edits kept</td></tr>
+        <tr><td><code>MAX_ERRORS</code></td><td>Failed commands and tracebacks kept</td></tr>
+        <tr><td><code>MAX_KEY_POINTS</code></td><td>Other salient statements kept</td></tr>
+      </tbody>
+    </table>
+    <p class="text-sm mt-3">Measure the effect on real threads with the eval harness:</p>
+    <pre>python3 eval/real_thread.py --url http://localhost:8000/v1 --transcript thread.json</pre>
+  </div>
+</div>
+
+<h2 id="faq" class="text-2xl font-semibold mt-10">FAQ</h2>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+  <div class="card bg-base-200 rounded-2xl box-shadow">
+    <div class="card-body">
+      <h3 class="card-title text-lg">Is the output deterministic?</h3>
+      <p class="text-sm">Yes. Same thread in, same summary out - no sampling, no model weights, no network calls. Good for reproducible evals.</p>
+    </div>
+  </div>
+  <div class="card bg-base-200 rounded-2xl box-shadow">
+    <div class="card-body">
+      <h3 class="card-title text-lg">How big a thread can it handle?</h3>
+      <p class="text-sm">Request bodies up to 64 MiB. A roughly 1M-token Zed session compacts in about 0.1 s at around 4 MB RSS.</p>
+    </div>
+  </div>
+  <div class="card bg-base-200 rounded-2xl box-shadow">
+    <div class="card-body">
+      <h3 class="card-title text-lg">Are the token counts exact?</h3>
+      <p class="text-sm">No - counting is word-boundary based, not cl100k BPE. It is close enough for trigger thresholds but do not treat it as ground truth.</p>
+    </div>
+  </div>
+  <div class="card bg-base-200 rounded-2xl box-shadow">
+    <div class="card-body">
+      <h3 class="card-title text-lg">Should I keep a real fallback model?</h3>
+      <p class="text-sm">Recommended. RustySqueezer is extractive; for long, meandering threads where nuance matters, point the compaction setting at a real small model and use RustySqueezer for the bulk of sessions.</p>
+    </div>
+  </div>
+</div>
+
+<footer class="footer footer-center mt-12 pt-6 border-t border-base-300 text-sm text-base-content/60">
+  <p>MIT licensed - source: <a class="link" href="https://github.com/handtrixx/RustySqueezer">github.com/handtrixx/RustySqueezer</a> - history in CHANGELOG.md</p>
+</footer>
+      </div>
+    </div>
+  </main>
+<script>
+const root = document.documentElement;
+const toggle = document.getElementById("mode-toggle");
+const icon = document.getElementById("mode-icon");
+const sun = '<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>';
+const moon = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+function setTheme(theme) {
+  root.dataset.theme = theme;
+  icon.innerHTML = theme === "dark" ? sun : moon;
+}
+setTheme(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+toggle.addEventListener("click", () => {
+  setTheme(root.dataset.theme === "dark" ? "light" : "dark");
+});
+</script>
+</body>
+</html>

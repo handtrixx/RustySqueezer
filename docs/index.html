@@ -64,6 +64,7 @@
       </a>
     </div>
     <div class="navbar-end flex-wrap gap-2">
+      <a href="integrations.html" class="btn btn-ghost btn-sm">Docs</a>
       <a href="https://github.com/handtrixx/RustySqueezer" class="btn btn-ghost btn-sm">GitHub</a>
       <a href="https://github.com/handtrixx/RustySqueezer/blob/main/README.md" class="btn btn-ghost btn-sm">README</a>
       <a href="https://github.com/handtrixx/RustySqueezer/actions/workflows/build-image.yml" class="btn btn-ghost btn-sm">Build status</a>
@@ -234,18 +235,21 @@ python3 eval/surfaces.py --url http://localhost:8000</pre>
         <div class="card-body">
           <h3 class="card-title text-lg">Zed</h3>
           <p class="text-sm text-base-content/70">Declare the endpoint as an OpenAI-compatible model with a large context window in settings.json, then point agent.compaction_model at it.</p>
+          <a href="integrations.html#zed" class="btn btn-outline btn-sm mt-3">Zed guide</a>
         </div>
       </div>
       <div class="card bg-base-200 rounded-2xl box-shadow">
         <div class="card-body">
           <h3 class="card-title text-lg">LiteLLM</h3>
-          <p class="text-sm text-base-content/70">Add an openai/rustysqueezer entry pointing at http://localhost:8000/v1 with a large max_tokens.</p>
+          <p class="text-sm text-base-content/70">Add an openai/rustysqueezer entry pointing at http://localhost:8000/v1 with a large max_tokens - or let the auto-router compact threads gateway-side.</p>
+          <a href="integrations.html#litellm" class="btn btn-outline btn-sm mt-3">LiteLLM guide</a>
         </div>
       </div>
       <div class="card bg-base-200 rounded-2xl box-shadow">
         <div class="card-body">
-          <h3 class="card-title text-lg">Anything else</h3>
-          <p class="text-sm text-base-content/70">Any harness that picks a summariser via an OpenAI, Anthropic or Ollama chat endpoint can use RustySqueezer as a drop-in.</p>
+          <h3 class="card-title text-lg">VS Code &amp; OpenCode</h3>
+          <p class="text-sm text-base-content/70">Copilot via the LiteLLM gateway; OpenCode via its agents.compaction.model setting. Full guides in the docs.</p>
+          <a href="integrations.html" class="btn btn-outline btn-sm mt-3">All integrations</a>
         </div>
       </div>
     </div>
