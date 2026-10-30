@@ -80,6 +80,28 @@ def main():
     streamed = "".join(d.get("delta", {}).get("text", "") for d in deltas if "delta" in d)
     results.append(check("anthropic-stream-parity", streamed == ref and deltas[0].get("type") == "message_start"))
 
+    # Anthropic native compaction (LiteLLM gateway context_compaction):
+    # body carries compaction {"type": "summarize"}, child is always
+    # non-streaming; response must be a single compaction block with a
+    # non-empty signature and stop_reason "compaction".
+    raw = json.loads(post(base + "/v1/messages", {
+        "model": "claude-sonnet-5",
+        "max_tokens": 4096,
+        "compaction": {"type": "summarize"},
+        "system": "You are a coding agent.",
+        "messages": anth_msgs,
+    }))
+    blocks = raw.get("content", [])
+    shape_ok = (
+        raw.get("stop_reason") == "compaction"
+        and len(blocks) == 1
+        and blocks[0].get("type") == "compaction"
+        and isinstance(blocks[0].get("signature"), str) and blocks[0].get("signature")
+        and isinstance(blocks[0].get("content"), str) and blocks[0].get("content").strip()
+    )
+    results.append(check("anthropic-compaction-shape", shape_ok, raw.get("stop_reason", "")))
+    results.append(check("anthropic-compaction-parity", shape_ok and blocks[0].get("content") == ref))
+
     # --- Ollama native surface ---
     ollama_msgs = [{"role": m["role"], "content": m["content"]} for m in THREAD]
     raw = json.loads(post(base + "/api/chat", {"model": "rustysqueezer", "messages": ollama_msgs, "stream": False}))

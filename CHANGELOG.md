@@ -2,6 +2,16 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.0.6 - 2026-10-30
+- **Anthropic native compaction surface.** `POST /v1/messages` requests that
+  carry a `compaction` directive (exactly what LiteLLM's gateway-native
+  `context_compaction` router sends) now return a single Anthropic compaction
+  block - `{"type": "compaction", "content": <summary>,
+  "signature": "rustysqueezer"}` with `stop_reason: "compaction"` - instead
+  of a plain text block, so the gateway can splice the summary into the
+  parent thread. Detected on the body key (the child request is always
+  non-streaming). Covered by `eval/surfaces.py`.
+
 ## v1.0.5 - 2026-10-30
 - **1M-token sessions verified.** Request body limit widened from 32 MiB to
   64 MiB; a 1,004,041-token thread (6.1 MB of JSON) compacts in ~0.1 s inside

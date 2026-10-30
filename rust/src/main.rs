@@ -155,6 +155,35 @@ async fn anthropic_messages(State(cfg): State<Config>, Json(body): Json<Value>) 
         .unwrap_or(cfg.model.as_str());
     let id = format!("msg_{}", chrono_like_now());
 
+    // LiteLLM gateway-native compaction: the child request carries a
+    // `compaction` directive (e.g. {"type": "summarize"}) and is always
+    // sent with stream:false. Reply with an Anthropic native compaction
+    // block (type "compaction", non-empty signature, stop_reason
+    // "compaction") so the gateway can splice the summary into the
+    // parent thread. Detect on the body key; the beta header is not
+    // needed and Axum's Json extractor would hide it.
+    if body.get("compaction").is_some() {
+        let text = if summary.trim().is_empty() {
+            "No conversation history available to summarize.".to_string()
+        } else {
+            summary
+        };
+        log_usage("anthropic-compaction", input_tokens, output_tokens, started.elapsed());
+        return Json(serde_json::json!({
+            "type": "message",
+            "id": id,
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "compaction", "content": text, "signature": "rustysqueezer"}],
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+            "stop_reason": "compaction",
+        }))
+        .into_response();
+    }
+
     if body
         .get("stream")
         .and_then(|s| s.as_bool())
