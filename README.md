@@ -310,6 +310,27 @@ Production hardening (from the 2026-10-29 readiness audit, in priority order):
    accepted on real threads. Note that summaries are extractive bullet facts,
    not narrative prose.
 
+Output quality gaps seen in the OpenCode/OpenChamber integration (2026-11-09):
+
+13. File-list false positives: tokens matched by the extension regex without
+    looking path-like are listed as files (`Wiki.js`, `llama.cpp`,
+    `//opencode.ai/config.json`). Exclude URL-looking tokens (scheme or `//`)
+    and consider keeping bare filenames only when they appear in a file-like
+    context.
+14. Deduplicate errors against key points: the same error string can appear in
+    both the Errors section and Important Context, wasting budget.
+15. Tail truncation clips long final answers mid-sentence (`tail_chars: 600`).
+    Budget per tail turn instead of a flat per-turn character cap, or raise the
+    default so the last assistant turn survives intact.
+16. Emit OpenCode's template headings natively: OpenCode v2.2.6 validates
+    compaction summaries (at least one line must exactly equal a `##` heading
+    of its template). Deployed workaround (2026-11-09) is config-only: the
+    shared container remaps `section_titles` via `CONFIG_PATH`, so Zed's
+    summaries carry the renamed headings too (Zed does not validate). Detecting
+    OpenCode's `<template>` per request and emitting its headings would keep
+    Zed byte-identical; note that an extractive summarizer cannot synthesize
+    Decisions / Work State / Next Move, so those sections stay approximate.
+
 ## License
 
 MIT - see [LICENSE](LICENSE). History is in [CHANGELOG.md](CHANGELOG.md).
