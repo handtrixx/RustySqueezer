@@ -115,7 +115,10 @@ async fn condense_chunk(cfg: &Config, bullets: &[String]) -> Option<Vec<String>>
     .await
     .ok()?
     .ok()?;
-    let v: Value = timeout(Duration::from_millis(cfg.assist_timeout_ms), resp.json()).await.ok()?;
+    let v: Value = timeout(Duration::from_millis(cfg.assist_timeout_ms), resp.json())
+        .await
+        .ok()?
+        .ok()?;
     let text = v.get("choices")?.get(0)?.get("message")?.get("content")?.as_str()?;
     parse_bullets(text)
 }
@@ -163,7 +166,7 @@ pub async fn condense_points(lines: &[String], cfg: &Config) -> (Vec<String>, As
         AssistOutcome {
             chunks: n,
             ok,
-            ms: started.elapsed().as_ms(),
+            ms: started.elapsed().as_millis(),
         },
     )
 }
@@ -184,7 +187,7 @@ mod tests {
         // Order is preserved across chunks and the rest.
         let all: Vec<&String> = chunks.iter().flatten().chain(rest.iter()).collect();
         for (a, b) in all.iter().zip(lines.iter()) {
-            assert_eq!(a, b);
+            assert_eq!(a.as_str(), b.as_str());
         }
     }
 
