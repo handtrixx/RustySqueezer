@@ -2,6 +2,23 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.1.0 - 2026-11-11
+- **Small-model assist (optional, off by default).** The key-points bullets
+  selected by the extractive pre-pass can be condensed chunk by chunk by a
+  local llama.cpp server (`ASSIST_BASE_URL`, default model `qwen3.5-2b`):
+  chunks are sent concurrently with `temperature 0` and a fixed seed, and the
+  condensed bullets are merged back into the same section budget. Tail,
+  commands, files, errors, follow-ups stay byte-verbatim. On any chunk
+  failure - timeout (`ASSIST_TIMEOUT_MS`, default 15 s), connection error or
+  unusable output - that chunk keeps its original extractive bullets, so the
+  summary never degrades below v1.0.6 behaviour. `/health` reports
+  `assist`/`assist_model`, `[assist]` lines log chunk count and latency.
+- `reqwest` re-added (plain HTTP only, no TLS stack): the aux server lives on
+  the internal docker network.
+- Config keys `assist_base_url`, `assist_model`, `assist_timeout_ms`,
+  `assist_max_chunks`, `assist_chunk_chars`, `assist_max_tokens` (config file
+  and env; env wins).
+
 ## v1.0.6 - 2026-10-30
 - **Anthropic native compaction surface.** `POST /v1/messages` requests that
   carry a `compaction` directive (exactly what LiteLLM's gateway-native

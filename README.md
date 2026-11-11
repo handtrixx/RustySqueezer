@@ -330,6 +330,13 @@ Output quality gaps seen in the OpenCode/OpenChamber integration (2026-11-09):
     OpenCode's `<template>` per request and emitting its headings would keep
     Zed byte-identical; note that an extractive summarizer cannot synthesize
     Decisions / Work State / Next Move, so those sections stay approximate.
+17. ~~Small-model assist~~ - implemented 2026-11-11 (v1.1.0): the key-points
+    bullets are condensed chunk by chunk by a local llama.cpp server
+    (`ASSIST_BASE_URL`, Qwen3.5-2B in prod), concurrently and greedy-decoded.
+    Only key points are condensed; tail/commands/files/errors stay verbatim;
+    failed or timed-out chunks fall back to the extractive bullets. The 2026
+    ASSIST path (one big generative summary) stays dead - this design only
+    asks the 2B model to condense passages it can actually handle.
 
 ## License
 

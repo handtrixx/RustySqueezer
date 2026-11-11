@@ -58,6 +58,16 @@ pub struct Config {
     // The tail gets the largest slice: it is the part the agent needs verbatim
     // to continue, so it is budgeted before everything else.
     pub budgets: HashMap<String, usize>,
+    // Small-model assist: condense the key-points bullets with a local
+    // llama.cpp server (map-reduce over chunks). Empty base_url = off, and
+    // the extractive summary stays byte-identical to v1.0.6. Only key_points
+    // is condensed; tail, commands, files and errors stay verbatim.
+    pub assist_base_url: String,
+    pub assist_model: String,
+    pub assist_timeout_ms: u64,
+    pub assist_max_chunks: usize,
+    pub assist_chunk_chars: usize,
+    pub assist_max_tokens: usize,
 }
 
 fn env_int(name: &str, default: i64) -> usize {
@@ -139,6 +149,14 @@ fn defaults() -> Config {
         ))
         .unwrap(),
         budgets: default_budgets(),
+        assist_base_url: String::new(),
+        assist_model: "qwen3.5-2b".to_string(),
+        // ~140 tokens per chunk across up to 3 concurrent chunks is what a
+        // 2B model on this CPU can produce in roughly one batch pass (~15 s).
+        assist_timeout_ms: 15000,
+        assist_max_chunks: 3,
+        assist_chunk_chars: 700,
+        assist_max_tokens: 140,
         sections: vec![
             "original_task".into(),
             "followups".into(),
@@ -208,6 +226,24 @@ fn apply_json(cfg: &mut Config, v: &Value) {
             }
         }
     }
+    if let Some(s) = v.get("assist_base_url").and_then(|x| x.as_str()) {
+        cfg.assist_base_url = s.to_string();
+    }
+    if let Some(s) = v.get("assist_model").and_then(|x| x.as_str()) {
+        cfg.assist_model = s.to_string();
+    }
+    if let Some(n) = v.get("assist_timeout_ms").and_then(|x| x.as_u64()) {
+        cfg.assist_timeout_ms = n;
+    }
+    if let Some(n) = v.get("assist_max_chunks").and_then(|x| x.as_u64()) {
+        cfg.assist_max_chunks = n as usize;
+    }
+    if let Some(n) = v.get("assist_chunk_chars").and_then(|x| x.as_u64()) {
+        cfg.assist_chunk_chars = n as usize;
+    }
+    if let Some(n) = v.get("assist_max_tokens").and_then(|x| x.as_u64()) {
+        cfg.assist_max_tokens = n as usize;
+    }
 }
 
 impl Config {
@@ -233,7 +269,22 @@ impl Config {
         cfg.max_files = env_int("MAX_FILES", cfg.max_files as i64);
         cfg.max_errors = env_int("MAX_ERRORS", cfg.max_errors as i64);
         cfg.max_key_points = env_int("MAX_KEY_POINTS", cfg.max_key_points as i64);
+        if let Ok(v) = env::var("ASSIST_BASE_URL") {
+            cfg.assist_base_url = v;
+        }
+        if let Ok(v) = env::var("ASSIST_MODEL") {
+            cfg.assist_model = v;
+        }
+        cfg.assist_timeout_ms = env_int("ASSIST_TIMEOUT_MS", cfg.assist_timeout_ms as i64) as u64;
+        cfg.assist_max_chunks = env_int("ASSIST_MAX_CHUNKS", cfg.assist_max_chunks as i64);
+        cfg.assist_chunk_chars = env_int("ASSIST_CHUNK_CHARS", cfg.assist_chunk_chars as i64);
+        cfg.assist_max_tokens = env_int("ASSIST_MAX_TOKENS", cfg.assist_max_tokens as i64);
         cfg
+    }
+
+    /// True when the small-model assist is wired (base URL set and timeout > 0).
+    pub fn assist_enabled(&self) -> bool {
+        !self.assist_base_url.is_empty() && self.assist_timeout_ms > 0
     }
 
     /// Chars a section's body may use: its share of the content budget (the
@@ -305,5 +356,25 @@ mod tests {
         assert!(cfg.file_re.is_match("docs/index.html"));
         assert_eq!(cfg.title("key_points"), "Key points from the assistant");
         assert_eq!(cfg.sections.len(), 8);
+    }
+
+    #[test]
+    fn assist_defaults_off_and_config_enables_it() {
+        let mut cfg = defaults();
+        assert!(!cfg.assist_enabled());
+        apply_json(
+            &mut cfg,
+            &json!({
+                "assist_base_url": "http://rsq-aux:8080/v1",
+                "assist_model": "qwen3.5-2b",
+                "assist_timeout_ms": 9000,
+                "assist_max_chunks": 2,
+            }),
+        );
+        assert!(cfg.assist_enabled());
+        assert_eq!(cfg.assist_timeout_ms, 9000);
+        assert_eq!(cfg.assist_max_chunks, 2);
+        apply_json(&mut cfg, &json!({ "assist_timeout_ms": 0 }));
+        assert!(!cfg.assist_enabled());
     }
 }

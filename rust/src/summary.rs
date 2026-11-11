@@ -393,13 +393,28 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     selected.truncate(cfg.max_key_points);
     let key = selected;
     if cfg.section_enabled("key_points") && !key.is_empty() {
+        let bullets: Vec<String> = key
+            .iter()
+            .map(|k| format!("- {}", clip(&k.text, 240)))
+            .collect();
+        // Small-model assist: condense the bullets with the local aux model.
+        // On any failure the original extractive bullets are kept, so the
+        // summary never degrades below the v1.0.6 behaviour.
+        let body_lines = if cfg.assist_enabled() {
+            let (condensed, outcome) = crate::assist::condense_points(&bullets, cfg).await;
+            println!(
+                "[assist] key_points chunks={} ok={} ms={} (fallback keeps extractive bullets)",
+                outcome.chunks, outcome.ok, outcome.ms
+            );
+            condensed
+        } else {
+            bullets
+        };
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("key_points"),
             section_body(
-                &key.iter()
-                    .map(|k| format!("- {}", clip(&k.text, 240)))
-                    .collect::<Vec<_>>(),
+                &body_lines,
                 cfg.section_cap("key_points", content_budget, total_share),
                 "key points",
             )

@@ -41,5 +41,11 @@
     "errors": "Errors / problems seen",
     "key_points": "Key points from the assistant",
     "tail": "Most recent turns (verbatim, clipped)"
-  }
+  },
+  "assist_base_url": "",
+  "assist_model": "qwen3.5-2b",
+  "assist_timeout_ms": 15000,
+  "assist_max_chunks": 3,
+  "assist_chunk_chars": 700,
+  "assist_max_tokens": 140
 }

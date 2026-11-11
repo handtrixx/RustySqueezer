@@ -1,3 +1,4 @@
+mod assist;
 mod config;
 mod summary;
 mod text;
@@ -22,6 +23,8 @@ async fn health(State(cfg): State<Config>) -> impl IntoResponse {
         "model": cfg.model,
         "max_summary_chars": cfg.max_summary_chars,
         "tail_turns": cfg.tail_turns,
+        "assist": cfg.assist_enabled(),
+        "assist_model": if cfg.assist_enabled() { cfg.assist_model.as_str() } else { "" },
     }))
 }
 

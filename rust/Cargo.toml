@@ -1,6 +1,6 @@
 [package]
 name = "rustysqueezer"
-version = "1.0.6"
+version = "1.1.0"
 edition = "2021"
 
 [dependencies]
@@ -9,6 +9,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
+# Small-model assist (map-reduce condensation of the key-points section):
+# plain HTTP only - the aux llama.cpp server lives on the internal docker
+# network, so no TLS stack is compiled into the scratch image.
+reqwest = { version = "0.12", default-features = false, features = ["http1", "json"] }
 
 [profile.release]
 strip = true
