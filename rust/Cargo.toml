@@ -11,8 +11,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
 # Small-model assist (map-reduce condensation of the key-points section):
 # plain HTTP only - the aux llama.cpp server lives on the internal docker
-# network, so no TLS stack is compiled into the scratch image.
-reqwest = { version = "0.12", default-features = false, features = ["http1", "json"] }
+# network, so no TLS stack is compiled into the scratch image. HTTP/1.1 is
+# reqwest's always-on baseline; the only feature here is json.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [profile.release]
 strip = true
