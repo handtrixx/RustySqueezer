@@ -61,14 +61,16 @@ pub fn chunk_lines(lines: &[String], max_chars: usize, max_chunks: usize) -> (Ve
 }
 
 /// Turn model output into bullet lines: trim, drop empty/comment lines,
-/// normalise "*" bullets to "-". Returns None if nothing usable came back.
+/// normalise bullets to "-" and strip echoed leading dashes (Qwen sometimes
+/// re-emits the input bullets as "- - fact"). Returns None if nothing usable
+/// came back.
 fn parse_bullets(text: &str) -> Option<Vec<String>> {
     let lines: Vec<String> = text
         .lines()
         .map(|l| l.trim())
         .filter(|l| l.starts_with('-') || l.starts_with('*'))
         .map(|l| {
-            let body = l[1..].trim();
+            let body = l[1..].trim().trim_start_matches(['-', '*']).trim();
             if body.is_empty() {
                 String::new()
             } else {
@@ -191,6 +193,11 @@ mod tests {
         assert_eq!(
             parse_bullets("* kept one\n- kept two\nThinking Process:\n\n"),
             Some(vec!["- kept one".to_string(), "- kept two".to_string()])
+        );
+        // Qwen echoes the input bullets with a doubled dash; collapse it.
+        assert_eq!(
+            parse_bullets("- - fact one\n- -* fact two"),
+            Some(vec!["- fact one".to_string(), "- fact two".to_string()])
         );
         assert_eq!(parse_bullets("no bullets here"), None);
         assert_eq!(parse_bullets("- \n-"), None);
