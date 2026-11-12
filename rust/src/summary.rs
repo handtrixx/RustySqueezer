@@ -586,6 +586,11 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     let per_turn = cfg.tail_chars.max(tail_cap / cfg.tail_turns.max(1));
     let mut tail_lines = Vec::new();
     for m in &thread[tail_start..] {
+        // An injected checkpoint is not a turn the agent continues from; the
+        // flattening above already carries its content forward.
+        if cfg.checkpoint_re.is_match(&msg_text(m)) {
+            continue;
+        }
         let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("?");
         let mut text = clip(&msg_text(m), per_turn);
         if let Some(calls) = m.get("tool_calls").and_then(|v| v.as_array()) {
@@ -887,14 +892,15 @@ mod tests {
             }),
         ];
         let s = build_summary(&thread, &cfg).await;
-        // The deepest original request survives; the checkpoint boilerplate does not.
+        // The deepest original request survives; nothing from the old
+        // checkpoints is re-embedded (no wrapper tags anywhere, note included).
         assert!(
             s.contains("Migrate Stalwart FileNode storage"),
             "deepest objective lost:\n{s}"
         );
         assert!(
-            !s.contains("Compaction requested by the agent harness"),
-            "checkpoint boilerplate re-embedded:\n{s}"
+            !s.contains("<conversation-checkpoint>"),
+            "checkpoint re-embedded:\n{s}"
         );
         // The old checkpoint's error lines must not be re-extracted as fresh errors.
         assert!(!s.contains("failed to decode token"), "old errors re-extracted:\n{s}");
