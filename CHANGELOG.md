@@ -2,6 +2,26 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.1.1 - 2026-11-12
+- **Checkpoint flattening.** Harnesses that re-inject the previous summary
+  (OpenChamber/OpenCode wrap it in `<conversation-checkpoint>`) previously
+  caused compaction round N+1 to embed round N verbatim as the objective, N+2
+  to embed N+1, and the user's first request was lost mid-word by the clip.
+  Messages matching `checkpoint_pattern` are now treated as carried state: the
+  objective section is extracted and recursed to the deepest original request;
+  checkpoint spans are stripped from the errors/files pools so old boilerplate
+  cannot re-contaminate them; the previous checkpoint's key-point bullets are
+  carried into the key-point pool (weight 0.8, below assistant prose).
+- **Follow-up filter.** Short acknowledgements ("it works", "thanks", "ok")
+  no longer appear in the follow-ups section, which some harnesses title as
+  "Requirements". Configurable via `followup_skip_pattern`.
+- **Assist timeout raised 15 s → 45 s.** rsq-aux serves `--parallel 3` but one
+  GPU serialises the batches, so with 3 chunks the 2nd and 3rd always timed
+  out at 15 s (observed `[assist] chunks=3 ok=0 ms=15001`); 45 s covers the
+  slowest queued chunk.
+- `clip` now cuts at the last word boundary instead of mid-word
+  (was producing fragments like "(Co...").
+
 ## v1.1.0 - 2026-11-11
 - **Small-model assist (optional, off by default).** The key-points bullets
   selected by the extractive pre-pass can be condensed chunk by chunk by a

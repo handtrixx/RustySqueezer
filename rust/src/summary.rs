@@ -13,6 +13,101 @@ struct Scored {
     text: String,
 }
 
+const CP_OPEN: &str = "<conversation-checkpoint>";
+const CP_CLOSE: &str = "</conversation-checkpoint>";
+
+/// Remove every `<conversation-checkpoint>…</conversation-checkpoint>` span.
+/// An unterminated span runs to the end of the text (a clipped embed is not
+/// closed). Used so an embedded checkpoint cannot re-contaminate the errors,
+/// files and key-point pools with its own boilerplate.
+fn strip_checkpoint_spans(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find(CP_OPEN) {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + CP_OPEN.len()..];
+        match after.find(CP_CLOSE) {
+            Some(close) => rest = &after[close + CP_CLOSE.len()..],
+            None => rest = "",
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Body of the `## <title>` section: lines until the next heading that sits
+/// *outside* any checkpoint span, or until the wrapper close. Headings inside a
+/// nested checkpoint are opaque so the objective body stays whole for the
+/// recursion in `checkpoint_objective`.
+fn section_body_of(text: &str, title: &str) -> Option<String> {
+    let heading = format!("## {}", title);
+    let mut body: Vec<&str> = Vec::new();
+    let mut in_section = false;
+    let mut cp_depth = 0usize;
+    for line in text.lines() {
+        let t = line.trim();
+        if t == heading && cp_depth == 0 {
+            in_section = true;
+            continue;
+        }
+        if !in_section {
+            // Wrapper markers before the heading are not counted: the whole
+            // message sits inside the harness wrapper, so depth must start at
+            // zero for the section itself and only track *nested* checkpoints.
+            continue;
+        }
+        if line.contains(CP_OPEN) {
+            cp_depth += 1;
+        }
+        if line.contains(CP_CLOSE) {
+            cp_depth = cp_depth.saturating_sub(1);
+        }
+        if cp_depth == 0 && (t.starts_with("## ") || t == CP_CLOSE) {
+            break;
+        }
+        body.push(line);
+    }
+    if in_section && !body.is_empty() {
+        Some(body.join("\n").trim().to_string())
+    } else {
+        None
+    }
+}
+
+/// The user's actual request behind possibly several layers of embedded
+/// checkpoints: take the objective section of the checkpoint and recurse into
+/// whatever it embeds. Compaction rounds nest a checkpoint inside the previous
+/// objective, so without recursion the first request is lost (mid-word, by the
+/// clip) on the second round. Returns None when the message is not a
+/// checkpoint or carries no objective body.
+fn checkpoint_objective(text: &str, cfg: &Config, depth: usize) -> Option<String> {
+    if depth >= 8 || !cfg.checkpoint_re.is_match(text) {
+        return None;
+    }
+    // The remapped production title first, then the crate defaults.
+    let mut titles = vec![cfg.title("original_task")];
+    for t in ["Original task", "Objective"] {
+        if !titles.iter().any(|x| x == t) {
+            titles.push(t.to_string());
+        }
+    }
+    for title in &titles {
+        if let Some(body) = section_body_of(text, title) {
+            if cfg.checkpoint_re.is_match(&body) {
+                if let Some(deeper) = checkpoint_objective(&body, cfg, depth + 1) {
+                    return Some(deeper);
+                }
+            }
+            let stripped = strip_checkpoint_spans(&body);
+            let stripped = stripped.trim();
+            if !stripped.is_empty() {
+                return Some(stripped.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn tool_facts(thread: &[Value], cfg: &Config) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut commands = Vec::new();
     let mut files = Vec::new();
@@ -54,7 +149,7 @@ fn tool_facts(thread: &[Value], cfg: &Config) -> (Vec<String>, Vec<String>, Vec<
                 }
             }
         }
-        files.extend(file_matches(&msg_text(m), cfg));
+        files.extend(file_matches(&strip_checkpoint_spans(&msg_text(m)), cfg));
     }
     (commands, files, tools)
 }
@@ -153,11 +248,20 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
 
     let mut system = String::new();
     let mut user_msgs: Vec<Value> = Vec::new();
+    let mut checkpoint_carried: Vec<String> = Vec::new();
     let mut assistant_msgs: Vec<Value> = Vec::new();
     for m in &thread {
         match m.get("role").and_then(|r| r.as_str()) {
             Some("system") => system.push_str(&msg_text(m)),
-            Some("user") => user_msgs.push(m.clone()),
+            Some("user") => {
+                let text = msg_text(m);
+                // A checkpoint is harness-injected state, not user intent.
+                if cfg.checkpoint_re.is_match(&text) {
+                    checkpoint_carried.push(text);
+                } else {
+                    user_msgs.push(m.clone());
+                }
+            }
             Some("assistant") => assistant_msgs.push(m.clone()),
             _ => {}
         }
@@ -165,18 +269,28 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
 
     let (commands, files, tools) = tool_facts(&thread, cfg);
 
-    let first = if !user_msgs.is_empty() {
-        user_msgs[0].clone()
-    } else {
-        Value::String(system)
-    };
-    let mut task_terms: HashSet<String> = term_counts(&msg_text(&first)).keys().cloned().collect();
-    if user_msgs.len() > 1 {
-        for m in &user_msgs[1..] {
-            for t in term_counts(&msg_text(m)).keys() {
-                if t.len() > 4 {
-                    task_terms.insert(t.clone());
-                }
+    // Objective: the deepest original request behind any embedded checkpoints,
+    // else the first real user message, else the system prompt. Flattening
+    // here is what keeps the user's first request through repeated rounds -
+    // embedding the previous checkpoint verbatim clipped it mid-word instead.
+    let task_text = checkpoint_carried
+        .iter()
+        .find_map(|t| checkpoint_objective(t, cfg, 0))
+        .or_else(|| {
+            user_msgs
+                .first()
+                .map(|m| msg_text(m))
+                .or_else(|| if system.is_empty() { None } else { Some(system.clone()) })
+        })
+        .unwrap_or_default();
+    let mut task_terms: HashSet<String> = term_counts(&task_text).keys().cloned().collect();
+    // Later user messages widen the task vocabulary; when a checkpoint supplied
+    // the objective every real message counts (the first real message is not
+    // the task then).
+    for m in &user_msgs {
+        for t in term_counts(&msg_text(m)).keys() {
+            if t.len() > 4 {
+                task_terms.insert(t.clone());
             }
         }
     }
@@ -204,22 +318,32 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     if !instruction.is_empty() {
         parts.push(cfg.title("note"));
     }
-    if cfg.section_enabled("original_task") && !user_msgs.is_empty() {
+    if cfg.section_enabled("original_task") && !task_text.is_empty() {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("original_task"),
             clip(
-                &msg_text(&user_msgs[0]),
+                &task_text,
                 cfg.section_cap("original_task", content_budget, total_share)
                     .min(1500),
             )
         ));
     }
-    if cfg.section_enabled("followups") && user_msgs.len() > 1 {
-        let followups: Vec<String> = user_msgs[1..]
-            .iter()
-            .map(|u| format!("- {}", clip(&msg_text(u), 300)))
-            .collect();
+    // Follow-ups: real user messages only - checkpoints are injected state, and
+    // when a checkpoint supplied the objective every real message is a
+    // follow-up. Short acknowledgements ("it works", "thanks") are not new
+    // requirements and are filtered out.
+    let followup_src: &[Value] = if checkpoint_carried.is_empty() && !user_msgs.is_empty() {
+        &user_msgs[1..]
+    } else {
+        &user_msgs[..]
+    };
+    let followups: Vec<String> = followup_src
+        .iter()
+        .filter(|u| !cfg.followup_skip_re.is_match(msg_text(u).trim()))
+        .map(|u| format!("- {}", clip(&msg_text(u), 300)))
+        .collect();
+    if cfg.section_enabled("followups") && !followups.is_empty() {
         parts.push(format!(
             "\n## {}\n{}",
             cfg.title("followups"),
@@ -314,7 +438,9 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     }
     let mut errors: Vec<String> = Vec::new();
     for m in &thread {
-        for line in msg_text(m).lines() {
+        // The embedded checkpoint carries its own error lines; the fresh ones
+        // in this thread are what the agent still has to deal with.
+        for line in strip_checkpoint_spans(&msg_text(m)).lines() {
             let l = line.trim();
             if has_error(line, cfg) && (10..=300).contains(&l.chars().count()) {
                 errors.push(l.to_string());
@@ -353,6 +479,33 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
             // contain the facts, so take fact-signal lines instead.
             for s in salient_lines(&msg_text(m)) {
                 pool.push((s, TOOL_WEIGHT));
+            }
+        }
+    }
+    // Facts from the previous compaction must survive the next one: the old
+    // checkpoint's key-point bullets are the recall surface of everything the
+    // harness already dropped from the context. Weighted below assistant prose;
+    // the near-duplicate filter removes any restated later in this thread.
+    const CHECKPOINT_WEIGHT: f64 = 0.8;
+    for cp in &checkpoint_carried {
+        let mut titles = vec![cfg.title("key_points")];
+        for t in ["Key points from the assistant", "Important Context"] {
+            if !titles.iter().any(|x| x == t) {
+                titles.push(t.to_string());
+            }
+        }
+        for title in &titles {
+            if let Some(body) = section_body_of(cp, title) {
+                for line in body.lines() {
+                    let l = line.trim().trim_start_matches('-').trim();
+                    // Skip markup (headings, wrapper tags, budget notes).
+                    if l.starts_with('#') || l.starts_with('<') || l.starts_with('(') {
+                        continue;
+                    }
+                    if (8..=320).contains(&l.chars().count()) {
+                        pool.push((l.to_string(), CHECKPOINT_WEIGHT));
+                    }
+                }
             }
         }
     }
@@ -706,5 +859,51 @@ mod tests {
     fn clip_behaviour() {
         assert_eq!(clip("  hello  ", 10), "hello");
         assert_eq!(clip("abcdefghij", 6), "abc...");
+        // A long word is cut at the last word boundary, never mid-word.
+        assert_eq!(clip("the quick brown fox jumps high", 12), "the...");
+    }
+
+    #[tokio::test]
+    async fn embedded_checkpoints_are_flattened() {
+        let cfg = Config::from_env();
+        // Two rounds of compaction: the outer checkpoint embeds the inner one
+        // verbatim inside its objective (the pre-flattening behaviour, as
+        // produced by OpenChamber's re-injection).
+        let inner = "<conversation-checkpoint>\n<summary>\n## Conversation summary (deterministic compaction by rustysqueezer)\n(Compaction requested by the agent harness; the task below is the original request.)\n## Original task\nMigrate Stalwart FileNode storage into Bulwark webmail and open office documents in Collabora\n## Errors / problems seen\n- Error 401: failed to decode token abcdef for the OIDC directory\n</summary>\n</conversation-checkpoint>";
+        let outer = format!(
+            "<conversation-checkpoint>\n<summary>\n## Conversation summary (deterministic compaction by rustysqueezer)\n(Compaction requested by the agent harness; the task below is the original request.)\n## Original task\n{}\n## Follow-up user messages\n- it works\n## Key points from the assistant\n- Collabora and Bulwark share one occollabora container, verified healthy 2026-11-12\n</summary>\n</conversation-checkpoint>",
+            inner
+        );
+        let thread = vec![
+            json!({ "role": "user", "content": outer }),
+            json!({ "role": "user", "content": "it works" }),
+            json!({
+                "role": "assistant",
+                "content": "Confirmed: the editor loads inline in webmail. Version 87a82132 recorded in the wiki.",
+            }),
+            json!({
+                "role": "user",
+                "content": "Please summarize the conversation so far so the agent can continue.",
+            }),
+        ];
+        let s = build_summary(&thread, &cfg).await;
+        // The deepest original request survives; the checkpoint boilerplate does not.
+        assert!(
+            s.contains("Migrate Stalwart FileNode storage"),
+            "deepest objective lost:\n{s}"
+        );
+        assert!(
+            !s.contains("Compaction requested by the agent harness"),
+            "checkpoint boilerplate re-embedded:\n{s}"
+        );
+        // The old checkpoint's error lines must not be re-extracted as fresh errors.
+        assert!(!s.contains("failed to decode token"), "old errors re-extracted:\n{s}");
+        // Facts from the previous checkpoint's key points carry forward.
+        assert!(
+            s.contains("occollabora"),
+            "old checkpoint facts not carried forward:\n{s}"
+        );
+        // A short acknowledgement is not a follow-up requirement.
+        assert!(!s.contains("## Follow-up user messages"), "ack kept as follow-up:\n{s}");
     }
 }

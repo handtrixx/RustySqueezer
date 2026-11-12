@@ -6,6 +6,16 @@ use serde_json::Value;
 
 const DEFAULT_COMPACT_PATTERN: &str =
     "summariz|summarise|compact|condense|conversation so far|context window";
+// A message that embeds a previously emitted compaction checkpoint (the harness
+// re-injects the last summary into the next compaction input). Without this,
+// compaction #2 embeds compaction #1 verbatim as the objective, #3 embeds #2,
+// and the user's actual first request is lost mid-word by the clip.
+const DEFAULT_CHECKPOINT_PATTERN: &str =
+    "conversation-checkpoint|deterministic compaction by rustysqueezer";
+// Short acknowledgements ("it works", "thanks") are not requirements; they used
+// to fill the follow-ups section as if they were new instructions.
+const DEFAULT_FOLLOWUP_SKIP_PATTERN: &str =
+    "^(it|that|this|everything|all) works?$|^(ok|okay|thanks|thank you|nice|great|perfect|done|lgtm|yep|yes|no|cool|wow)[!.]*$";
 // A bare "error"/"cannot" also occurs in ordinary prose ("great error messages",
 // a quoted `timeout: 5s`), which filled the errors section with noise on real
 // threads. Require an actual failure context.
@@ -52,6 +62,11 @@ pub struct Config {
     pub compact_re: Regex,
     pub error_re: Regex,
     pub file_re: Regex,
+    // Matches messages that embed a previous compaction checkpoint (see
+    // DEFAULT_CHECKPOINT_PATTERN).
+    pub checkpoint_re: Regex,
+    // Matches short acknowledgements that must not be listed as follow-ups.
+    pub followup_skip_re: Regex,
     pub sections: Vec<String>,
     pub titles: HashMap<String, String>,
     // Budget share (percent of max_summary_chars) reserved for each section.
@@ -148,12 +163,17 @@ fn defaults() -> Config {
             DEFAULT_FILE_EXTENSIONS.join("|")
         ))
         .unwrap(),
+        checkpoint_re: Regex::new(&format!("(?i){}", DEFAULT_CHECKPOINT_PATTERN)).unwrap(),
+        followup_skip_re: Regex::new(&format!("(?i){}", DEFAULT_FOLLOWUP_SKIP_PATTERN)).unwrap(),
         budgets: default_budgets(),
         assist_base_url: String::new(),
         assist_model: "qwen3.5-2b".to_string(),
-        // ~140 tokens per chunk across up to 3 concurrent chunks is what a
-        // 2B model on this CPU can produce in roughly one batch pass (~15 s).
-        assist_timeout_ms: 15000,
+        // ~140 tokens per chunk across up to 3 chunks. rsq-aux serves with
+        // --parallel 3, but a single GPU still serialises the batches: with a
+        // 15 s per-chunk latency the 2nd and 3rd concurrent chunks always hit a
+        // 15 s timeout (observed ok=0/3 on long threads). 45 s covers the
+        // slowest queued chunk.
+        assist_timeout_ms: 45000,
         assist_max_chunks: 3,
         assist_chunk_chars: 700,
         assist_max_tokens: 140,
@@ -204,6 +224,16 @@ fn apply_json(cfg: &mut Config, v: &Value) {
             if let Ok(re) = Regex::new(&parts.join("|")) {
                 cfg.compact_re = re;
             }
+        }
+    }
+    if let Some(p) = v.get("checkpoint_pattern").and_then(|x| x.as_str()) {
+        if let Ok(re) = Regex::new(&format!("(?i){}", p)) {
+            cfg.checkpoint_re = re;
+        }
+    }
+    if let Some(p) = v.get("followup_skip_pattern").and_then(|x| x.as_str()) {
+        if let Ok(re) = Regex::new(&format!("(?i){}", p)) {
+            cfg.followup_skip_re = re;
         }
     }
     if let Some(sections) = v.get("sections").and_then(|x| x.as_array()) {
@@ -376,5 +406,27 @@ mod tests {
         assert_eq!(cfg.assist_max_chunks, 2);
         apply_json(&mut cfg, &json!({ "assist_timeout_ms": 0 }));
         assert!(!cfg.assist_enabled());
+    }
+
+    #[test]
+    fn checkpoint_and_ack_patterns() {
+        let cfg = defaults();
+        assert!(cfg.checkpoint_re.is_match("<conversation-checkpoint>"));
+        assert!(cfg
+            .checkpoint_re
+            .is_match("Conversation summary (deterministic compaction by rustysqueezer)"));
+        assert!(!cfg.checkpoint_re.is_match("please fix the docker compose file"));
+        assert!(cfg.followup_skip_re.is_match("it works"));
+        assert!(cfg.followup_skip_re.is_match("Thanks!"));
+        assert!(cfg.followup_skip_re.is_match("OK"));
+        // A real instruction that merely starts with an acknowledgement word
+        // must not be skipped.
+        assert!(!cfg
+            .followup_skip_re
+            .is_match("it works but the editor frame is blank"));
+        assert!(!cfg.followup_skip_re.is_match("Deploy the compactor to production"));
+        // The timeout covers the slowest queued chunk on rsq-aux (3 chunks,
+        // serialised by one GPU at ~15 s each).
+        assert_eq!(cfg.assist_timeout_ms, 45000);
     }
 }

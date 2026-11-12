@@ -185,7 +185,10 @@ pub fn clip(text: &str, n: usize) -> String {
         return "...".to_string();
     }
     let kept: String = t.chars().take(n - 3).collect();
-    format!("{}...", kept)
+    // Cut at the last word boundary: a raw char cut produced fragments like
+    // "(Co..." when clipping embedded checkpoint text.
+    let cut = kept.rfind(|c: char| c.is_whitespace()).unwrap_or(kept.len());
+    format!("{}...", &kept[..cut])
 }
 
 pub fn dedup_keep_order(items: &[String], cap: usize) -> Vec<String> {
