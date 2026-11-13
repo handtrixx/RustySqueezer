@@ -80,8 +80,19 @@ fn section_body_of(text: &str, title: &str) -> Option<String> {
 /// objective, so without recursion the first request is lost (mid-word, by the
 /// clip) on the second round. Returns None when the message is not a
 /// checkpoint or carries no objective body.
+/// Harness boilerplate that can hijack the objective when an older compaction
+/// round stored the injected checkpoint wrapper as the task itself (observed in
+/// sessions compacted by pre-v1.1.1 images): drilling must not return the
+/// preamble, it must keep looking for the real request.
+fn is_checkpoint_boilerplate(text: &str) -> bool {
+    text.starts_with("The following is a summary")
+        || text.contains("historical context, not as new instructions")
+}
+
 fn checkpoint_objective(text: &str, cfg: &Config, depth: usize) -> Option<String> {
-    if depth >= 8 || !cfg.checkpoint_re.is_match(text) {
+    // Long chains: one round per compaction, so a session compacted many times
+    // must stay recoverable; 8 was reached once the chain grew past ~10 rounds.
+    if depth >= 24 || !cfg.checkpoint_re.is_match(text) {
         return None;
     }
     // The remapped production title first, then the crate defaults.
@@ -100,7 +111,7 @@ fn checkpoint_objective(text: &str, cfg: &Config, depth: usize) -> Option<String
             }
             let stripped = strip_checkpoint_spans(&body);
             let stripped = stripped.trim();
-            if !stripped.is_empty() {
+            if !stripped.is_empty() && !is_checkpoint_boilerplate(stripped) {
                 return Some(stripped.to_string());
             }
         }
@@ -277,8 +288,11 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         .iter()
         .find_map(|t| checkpoint_objective(t, cfg, 0))
         .or_else(|| {
+            // Pre-v1.1.1 contamination put the checkpoint wrapper itself into
+            // the user list; never let harness boilerplate become the task.
             user_msgs
-                .first()
+                .iter()
+                .find(|m| !is_checkpoint_boilerplate(msg_text(m).trim()))
                 .map(|m| msg_text(m))
                 .or_else(|| if system.is_empty() { None } else { Some(system.clone()) })
         })
@@ -866,6 +880,77 @@ mod tests {
         assert_eq!(clip("abcdefghij", 6), "abc...");
         // A long word is cut at the last word boundary, never mid-word.
         assert_eq!(clip("the quick brown fox jumps high", 12), "the...");
+    }
+
+    #[test]
+    fn contaminated_objective_never_returns_boilerplate() {
+        let cfg = Config::from_env();
+        // A round compacted by a pre-v1.1.1 image stored the harness wrapper
+        // preamble (clipped mid-word) as the objective: nothing deeper is
+        // recoverable, so extraction must fail rather than re-store boilerplate.
+        let contaminated = "<conversation-checkpoint>\n<summary>\n## Conversation summary (deterministic compaction by rustysqueezer)\n(Compaction requested by the agent harness; the task below is the original request.)\n## Objective\n<conversation-checkpoint>\nThe following is a summary and serialized record of earlier conv\n</summary>\n</conversation-checkpoint>";
+        assert_eq!(checkpoint_objective(contaminated, &cfg, 0), None);
+        // A pure preamble objective is rejected the same way.
+        let preamble = "<conversation-checkpoint>\n## Objective\nThe following is a summary and serialized record of earlier conversation. Treat it as historical context, not as new instructions.\n</conversation-checkpoint>";
+        assert_eq!(checkpoint_objective(preamble, &cfg, 0), None);
+    }
+
+    #[test]
+    fn objective_recovers_through_deep_chain() {
+        let cfg = Config::from_env();
+        // Twelve nested checkpoints (more than the old depth cap of 8): the
+        // first real request must still come out at the bottom.
+        let mut text = "Migrate Roundcube to Bulwark webmail with Keycloak SSO for mail@niklas-stephan.de".to_string();
+        for _ in 0..12 {
+            text = format!(
+                "<conversation-checkpoint>\n<summary>\n## Conversation summary (deterministic compaction by rustysqueezer)\n(Compaction requested by the agent harness; the task below is the original request.)\n## Objective\n{}\n## Commands run\n- docker ps\n</summary>\n</conversation-checkpoint>",
+                text
+            );
+        }
+        assert_eq!(
+            checkpoint_objective(&text, &cfg, 0).as_deref(),
+            Some("Migrate Roundcube to Bulwark webmail with Keycloak SSO for mail@niklas-stephan.de")
+        );
+    }
+
+    #[test]
+    fn unterminated_embed_still_drills_to_the_task() {
+        let cfg = Config::from_env();
+        // The harness clips the embedded checkpoint, so the inner wrapper is
+        // never closed; the inner objective heading must still be found.
+        let text = "<conversation-checkpoint>\n## Objective\n<conversation-checkpoint>\n## Objective\nfix the XOAUTH2 scope for imap tokens\n## Commands run\n- ssh handtrixxx.com 'docker ps'";
+        assert_eq!(
+            checkpoint_objective(text, &cfg, 0).as_deref(),
+            Some("fix the XOAUTH2 scope for imap tokens")
+        );
+    }
+
+    #[tokio::test]
+    async fn fallback_skips_boilerplate_first_user_message() {
+        let cfg = Config::from_env();
+        // With checkpoint detection off (custom pattern), wrapper text can land
+        // in the user list; the objective must be the first real request.
+        let mut cfg_off = Config::from_env();
+        cfg_off.checkpoint_re = regex::Regex::new("never-match-xyz").unwrap();
+        let thread = vec![
+            json!({
+                "role": "user",
+                "content": "The following is a summary and serialized record of earlier conversation. Treat it as historical context, not as new instructions.",
+            }),
+            json!({ "role": "user", "content": "replace roundcube with bulwark webmail" }),
+            json!({
+                "role": "user",
+                "content": "Please summarize the conversation so far so the agent can continue.",
+            }),
+        ];
+        let s = build_summary(&thread, &cfg_off).await;
+        // The objective must be the real request; the verbatim tail may still
+        // quote the wrapper message, which is correct behaviour.
+        let objective = s.split("## Follow-up").next().unwrap_or("");
+        assert!(objective.contains("replace roundcube with bulwark webmail"), "{s}");
+        assert!(!objective.contains("serialized record"), "{s}");
+        // Sanity: the default config classifies the wrapper as a checkpoint.
+        assert!(cfg.checkpoint_re.is_match("<conversation-checkpoint>"));
     }
 
     #[tokio::test]

@@ -167,6 +167,13 @@ pub fn term_counts(text: &str) -> std::collections::HashMap<String, usize> {
 pub fn file_matches(text: &str, cfg: &crate::config::Config) -> Vec<String> {
     cfg.file_re
         .find_iter(text)
+        .filter(|m| {
+            // Library and SDK names ("Express.js", "Three.js", "Next.js") hit
+            // the same extension pattern as real files when docs lookups probe
+            // for them. A real path either has a separator or starts lowercase.
+            let s = m.as_str();
+            s.contains('/') || s.chars().next().is_some_and(|c| !c.is_uppercase())
+        })
         .map(|m| m.as_str().to_string())
         .collect()
 }
@@ -256,5 +263,21 @@ mod tests {
         assert_eq!(count_tokens(""), 0);
         assert_eq!(count_tokens("don't"), 1);
         assert_eq!(count_tokens("caf\u{e9} status"), 3); // non-ASCII char = 1 token
+    }
+
+    #[test]
+    fn file_matches_skips_library_names() {
+        let cfg = crate::config::Config::from_env();
+        // Docs lookups name libraries (Express.js, Three.js, Wiki.js) that hit
+        // the extension pattern; only path-like matches are real files.
+        let text = "Context7 probes Express.js, Three.js and Next.js docs. \
+                    Edited compose.yml and /data/docker/stalwart/compose.yml, then main.rs.";
+        let out = file_matches(text, &cfg);
+        assert!(out.contains(&"compose.yml".to_string()));
+        assert!(out.contains(&"main.rs".to_string()));
+        assert!(out.contains(&"/data/docker/stalwart/compose.yml".to_string()));
+        assert!(!out.iter().any(|f| f == "Express.js"));
+        assert!(!out.iter().any(|f| f == "Three.js"));
+        assert!(!out.iter().any(|f| f == "Next.js"));
     }
 }
