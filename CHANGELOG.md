@@ -2,6 +2,24 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.1.3 - 2026-11-13
+- **Objective recovery from contaminated checkpoints.** Real contamination
+  (observed on a 14-round OpenChamber session) embeds the previous checkpoint
+  in *other* sections (commands, key points), not only in the objective: the
+  extraction now drills into every embedded `<conversation-checkpoint>` span
+  and takes the first non-boilerplate objective found.
+
+## v1.1.2 - 2026-11-13
+- **Checkpoint-wrapper contamination guard.** Pre-v1.1.1 rounds stored the
+  harness preamble (`The following is a summary and serialized record...`,
+  clipped) as the objective, which hijacked every later round. Boilerplate is
+  now rejected: extraction returns None instead of re-storing it, and the
+  first-user-message fallback skips wrapper text. Depth cap 8 to 24 so long
+  chains stay recoverable.
+- **File list drops library names.** Context7 docs probes (`Express.js`,
+  `Three.js`, `Next.js`, `Wiki.js`) hit the extension pattern and were listed
+  as files; matches that are capitalized without a path separator are skipped.
+
 ## v1.1.1 - 2026-11-12
 - **Checkpoint flattening.** Harnesses that re-inject the previous summary
   (OpenChamber/OpenCode wrap it in `<conversation-checkpoint>`) previously
