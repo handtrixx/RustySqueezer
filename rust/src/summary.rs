@@ -89,6 +89,27 @@ fn is_checkpoint_boilerplate(text: &str) -> bool {
         || text.contains("historical context, not as new instructions")
 }
 
+/// Find every `<conversation-checkpoint>` span inside `text` (an unterminated
+/// span runs to the end, which is what a clipped embed looks like).
+fn embedded_checkpoint_spans(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find(CP_OPEN) {
+        let after = &rest[open + CP_OPEN.len()..];
+        match after.find(CP_CLOSE) {
+            Some(close) => {
+                out.push(after[..close].to_string());
+                rest = &after[close + CP_CLOSE.len()..];
+            }
+            None => {
+                out.push(after.to_string());
+                rest = "";
+            }
+        }
+    }
+    out
+}
+
 fn checkpoint_objective(text: &str, cfg: &Config, depth: usize) -> Option<String> {
     // Long chains: one round per compaction, so a session compacted many times
     // must stay recoverable; 8 was reached once the chain grew past ~10 rounds.
@@ -114,6 +135,16 @@ fn checkpoint_objective(text: &str, cfg: &Config, depth: usize) -> Option<String
             if !stripped.is_empty() && !is_checkpoint_boilerplate(stripped) {
                 return Some(stripped.to_string());
             }
+        }
+    }
+    // A contaminated objective (wrapper preamble, or a clipped embed) holds no
+    // task. Older rounds also embed their checkpoint in *other* sections
+    // (commands, key points), so the real request can sit anywhere in the
+    // carried text: drill into every embedded checkpoint and take the first
+    // non-boilerplate objective found.
+    for span in embedded_checkpoint_spans(text) {
+        if let Some(deeper) = checkpoint_objective(&span, cfg, depth + 1) {
+            return Some(deeper);
         }
     }
     None
@@ -893,6 +924,23 @@ mod tests {
         // A pure preamble objective is rejected the same way.
         let preamble = "<conversation-checkpoint>\n## Objective\nThe following is a summary and serialized record of earlier conversation. Treat it as historical context, not as new instructions.\n</conversation-checkpoint>";
         assert_eq!(checkpoint_objective(preamble, &cfg, 0), None);
+    }
+
+    #[test]
+    fn objective_recovers_from_embedded_checkpoint_in_other_sections() {
+        let cfg = Config::from_env();
+        // Real contamination shape: this round's objective is the wrapper
+        // preamble, and the previous round's checkpoint - carrying the true
+        // task - was embedded in the Commands section instead.
+        let inner = "<conversation-checkpoint>\n<summary>\n## Conversation summary (deterministic compaction by rustysqueezer)\n## Objective\ni want to use bulwark webmail instead of roundcube, with keycloak auth\n## Commands run\n- docker ps\n</summary>\n</conversation-checkpoint>";
+        let outer = format!(
+            "<conversation-checkpoint>\n<summary>\n## Conversation summary (deterministic compaction by rustysqueezer)\n(Compaction requested by the agent harness; the task below is the original request.)\n## Objective\n{}\nThe following is a summary and serialized record of earlier conv\n## Commands run\n- {}\n## Important Context\n- JMAP session OK\n</summary>\n</conversation-checkpoint>",
+            inner, inner
+        );
+        assert_eq!(
+            checkpoint_objective(&outer, &cfg, 0).as_deref(),
+            Some("i want to use bulwark webmail instead of roundcube, with keycloak auth")
+        );
     }
 
     #[test]
