@@ -164,6 +164,16 @@ pub fn term_counts(text: &str) -> std::collections::HashMap<String, usize> {
     counts
 }
 
+/// True if the first segment of a token is a hostname (dots between
+/// alphanumeric labels, alphabetic TLD), so `opencode.ai/config.json` and
+/// `wiki.niklas-stephan.de/page.md` are read as URLs, not as paths.
+fn looks_like_domain(host: &str) -> bool {
+    let segs: Vec<&str> = host.split('.').collect();
+    segs.len() >= 2
+        && segs.iter().all(|s| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '-'))
+        && segs.last().is_some_and(|tld| !tld.is_empty() && tld.chars().all(|c| c.is_alphabetic()))
+}
+
 pub fn file_matches(text: &str, cfg: &crate::config::Config) -> Vec<String> {
     cfg.file_re
         .find_iter(text)
@@ -172,6 +182,16 @@ pub fn file_matches(text: &str, cfg: &crate::config::Config) -> Vec<String> {
             // the same extension pattern as real files when docs lookups probe
             // for them. A real path either has a separator or starts lowercase.
             let s = m.as_str();
+            // URL-looking tokens are not files: "//opencode.ai/config.json"
+            // and "opencode.ai/config.json" have a domain-like first segment.
+            if s.starts_with("//") {
+                return false;
+            }
+            if let Some((host, rest)) = s.split_once('/') {
+                if !rest.is_empty() && looks_like_domain(host) {
+                    return false;
+                }
+            }
             s.contains('/') || s.chars().next().is_some_and(|c| !c.is_uppercase())
         })
         .map(|m| m.as_str().to_string())
@@ -279,5 +299,12 @@ mod tests {
         assert!(!out.iter().any(|f| f == "Express.js"));
         assert!(!out.iter().any(|f| f == "Three.js"));
         assert!(!out.iter().any(|f| f == "Next.js"));
+        // URL-looking tokens are not files: the first segment is a domain.
+        let urls = "Fetched //opencode.ai/config.json and opencode.ai/config.json \
+                    from https://wiki.niklas-stephan.de/kb/page.md; edited ./src/config.json.";
+        let out2 = file_matches(urls, &cfg);
+        assert!(out2.contains(&"./src/config.json".to_string()));
+        assert!(!out2.iter().any(|f| f.contains("opencode.ai")));
+        assert!(!out2.iter().any(|f| f.contains("wiki.niklas-stephan.de")));
     }
 }

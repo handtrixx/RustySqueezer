@@ -16,13 +16,19 @@ use crate::config::Config;
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-fn client() -> &'static reqwest::Client {
+pub(crate) fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .http1_only()
             .build()
             .expect("reqwest client")
     })
+}
+
+/// Default endpoint of Google's Generative Language REST API. Used when an
+/// assist or forward points at provider "google" without an explicit base URL.
+pub fn google_default_base() -> String {
+    "https://generativelanguage.googleapis.com/v1".to_string()
 }
 
 /// Pack bullet lines into at most `max_chunks` chunks of <= `max_chars`
@@ -92,35 +98,59 @@ every line starts with '-'; no preamble, no commentary, no thinking.\n\nNotes:\n
 
 /// Condense one chunk. Returns None on any failure (timeout, HTTP error,
 /// unusable body) so the caller falls back to the original bullets.
+/// Provider "google" speaks the Gemini REST API (key required, base URL
+/// optional); anything else is an OpenAI-compatible server (base URL required).
 async fn condense_chunk(cfg: &Config, bullets: &[String]) -> Option<Vec<String>> {
-    let base = cfg.assist_base_url.trim_end_matches('/');
-    let body = json!({
-        "model": cfg.assist_model,
-        "messages": [
-            {"role": "user", "content": format!("{CONDENSE_PROMPT}{}", bullets.join("\n"))}
-        ],
-        // Greedy decoding keeps the condensed output reproducible across runs.
-        "temperature": 0.0,
-        "seed": 0,
-        "max_tokens": cfg.assist_max_tokens,
-        "stream": false,
-    });
-    let resp = timeout(
-        Duration::from_millis(cfg.assist_timeout_ms),
+    let prompt = format!("{CONDENSE_PROMPT}{}", bullets.join("\n"));
+    let dur = Duration::from_millis(cfg.assist_timeout_ms);
+    let req = if cfg.assist_provider == "google" {
+        let base = if cfg.assist_base_url.is_empty() {
+            google_default_base()
+        } else {
+            cfg.assist_base_url.trim_end_matches('/').to_string()
+        };
+        crate::forward::gemini_request(
+            &base,
+            &cfg.assist_model,
+            &cfg.assist_api_key,
+            &json!({
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.0,
+                    "maxOutputTokens": cfg.assist_max_tokens,
+                    "seed": 0,
+                },
+            }),
+        )
+    } else {
+        let base = cfg.assist_base_url.trim_end_matches('/');
         client()
             .post(format!("{base}/chat/completions"))
-            .json(&body)
-            .send(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    let v: Value = timeout(Duration::from_millis(cfg.assist_timeout_ms), resp.json())
-        .await
-        .ok()?
-        .ok()?;
-    let text = v.get("choices")?.get(0)?.get("message")?.get("content")?.as_str()?;
-    parse_bullets(text)
+            .json(&json!({
+                "model": cfg.assist_model,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                // Greedy decoding keeps the condensed output reproducible across runs.
+                "temperature": 0.0,
+                "seed": 0,
+                "max_tokens": cfg.assist_max_tokens,
+                "stream": false,
+            }))
+    };
+    let resp = timeout(dur, req.send()).await.ok()?.ok()?;
+    let v: Value = timeout(dur, resp.json()).await.ok()?.ok()?;
+    let text = if cfg.assist_provider == "google" {
+        crate::forward::gemini_text(&v)
+    } else {
+        v.get("choices")?
+            .get(0)?
+            .get("message")?
+            .get("content")?
+            .as_str()
+            .map(|s| s.to_string())
+    };
+    parse_bullets(text.as_deref()?)
 }
 
 pub struct AssistOutcome {

@@ -8,3 +8,4 @@ push_helper.py
 rust/target/
 _site/
 __pycache__/
+rust/.cargo/

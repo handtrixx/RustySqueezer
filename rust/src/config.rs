@@ -83,6 +83,25 @@ pub struct Config {
     pub assist_max_chunks: usize,
     pub assist_chunk_chars: usize,
     pub assist_max_tokens: usize,
+    // Assist backend dialect: "openai" (OpenAI-compatible server such as
+    // llama.cpp; needs assist_base_url) or "google" (Gemini REST API; needs
+    // assist_api_key, base URL optional). Keys are never logged or echoed.
+    pub assist_provider: String,
+    pub assist_api_key: String,
+    // Forwarding mode (roadmap item 18): instead of answering extractively,
+    // pass the request through to a real model. Off by default; any upstream
+    // failure falls back to the extractive summary. Same provider dialect as
+    // assist: "google" needs forward_api_key, "openai" needs forward_base_url.
+    pub forward_base_url: String,
+    pub forward_provider: String,
+    pub forward_model: String,
+    pub forward_api_key: String,
+    pub forward_timeout_ms: u64,
+    pub forward_max_tokens: usize,
+    // Emit the harness template's own headings when the compaction prompt
+    // embeds one (OpenCode validates exact heading lines); off keeps the
+    // Zed-default titles regardless.
+    pub template_headings: bool,
 }
 
 fn env_int(name: &str, default: i64) -> usize {
@@ -142,7 +161,7 @@ fn default_budgets() -> HashMap<String, usize> {
     b
 }
 
-fn defaults() -> Config {
+pub(crate) fn defaults() -> Config {
     Config {
         model: "rustysqueezer".to_string(),
         max_summary_chars: 12000,
@@ -177,6 +196,18 @@ fn defaults() -> Config {
         assist_max_chunks: 3,
         assist_chunk_chars: 700,
         assist_max_tokens: 140,
+        assist_provider: "openai".to_string(),
+        assist_api_key: String::new(),
+        forward_base_url: String::new(),
+        forward_provider: "openai".to_string(),
+        forward_model: String::new(),
+        forward_api_key: String::new(),
+        // Gemini flash answers a full thread in well under a minute; 90 s
+        // covers slow cold starts without hanging the harness compaction.
+        forward_timeout_ms: 90000,
+        // Compaction summaries are short; 2048 keeps Gemini from rambling.
+        forward_max_tokens: 2048,
+        template_headings: false,
         sections: vec![
             "original_task".into(),
             "followups".into(),
@@ -274,6 +305,33 @@ fn apply_json(cfg: &mut Config, v: &Value) {
     if let Some(n) = v.get("assist_max_tokens").and_then(|x| x.as_u64()) {
         cfg.assist_max_tokens = n as usize;
     }
+    if let Some(s) = v.get("assist_provider").and_then(|x| x.as_str()) {
+        cfg.assist_provider = s.to_string();
+    }
+    if let Some(s) = v.get("assist_api_key").and_then(|x| x.as_str()) {
+        cfg.assist_api_key = s.to_string();
+    }
+    if let Some(s) = v.get("forward_base_url").and_then(|x| x.as_str()) {
+        cfg.forward_base_url = s.to_string();
+    }
+    if let Some(s) = v.get("forward_provider").and_then(|x| x.as_str()) {
+        cfg.forward_provider = s.to_string();
+    }
+    if let Some(s) = v.get("forward_model").and_then(|x| x.as_str()) {
+        cfg.forward_model = s.to_string();
+    }
+    if let Some(s) = v.get("forward_api_key").and_then(|x| x.as_str()) {
+        cfg.forward_api_key = s.to_string();
+    }
+    if let Some(n) = v.get("forward_timeout_ms").and_then(|x| x.as_u64()) {
+        cfg.forward_timeout_ms = n;
+    }
+    if let Some(n) = v.get("forward_max_tokens").and_then(|x| x.as_u64()) {
+        cfg.forward_max_tokens = n as usize;
+    }
+    if let Some(b) = v.get("template_headings").and_then(|x| x.as_bool()) {
+        cfg.template_headings = b;
+    }
 }
 
 impl Config {
@@ -309,12 +367,52 @@ impl Config {
         cfg.assist_max_chunks = env_int("ASSIST_MAX_CHUNKS", cfg.assist_max_chunks as i64);
         cfg.assist_chunk_chars = env_int("ASSIST_CHUNK_CHARS", cfg.assist_chunk_chars as i64);
         cfg.assist_max_tokens = env_int("ASSIST_MAX_TOKENS", cfg.assist_max_tokens as i64);
+        if let Ok(v) = env::var("ASSIST_PROVIDER") {
+            cfg.assist_provider = v;
+        }
+        if let Ok(v) = env::var("ASSIST_API_KEY") {
+            cfg.assist_api_key = v;
+        }
+        if let Ok(v) = env::var("FORWARD_BASE_URL") {
+            cfg.forward_base_url = v;
+        }
+        if let Ok(v) = env::var("FORWARD_PROVIDER") {
+            cfg.forward_provider = v;
+        }
+        if let Ok(v) = env::var("FORWARD_MODEL") {
+            cfg.forward_model = v;
+        }
+        if let Ok(v) = env::var("FORWARD_API_KEY") {
+            cfg.forward_api_key = v;
+        }
+        cfg.forward_timeout_ms = env_int("FORWARD_TIMEOUT_MS", cfg.forward_timeout_ms as i64) as u64;
+        cfg.forward_max_tokens = env_int("FORWARD_MAX_TOKENS", cfg.forward_max_tokens as i64);
+        if let Ok(v) = env::var("TEMPLATE_HEADINGS") {
+            cfg.template_headings = matches!(v.as_str(), "1" | "true" | "yes" | "on");
+        }
         cfg
     }
 
-    /// True when the small-model assist is wired (base URL set and timeout > 0).
+    /// True when the small-model assist is wired: an OpenAI-compatible server
+    /// needs a base URL, Google needs an API key; a zero timeout disables it.
     pub fn assist_enabled(&self) -> bool {
-        !self.assist_base_url.is_empty() && self.assist_timeout_ms > 0
+        self.assist_timeout_ms > 0
+            && match self.assist_provider.as_str() {
+                "google" => !self.assist_api_key.is_empty(),
+                _ => !self.assist_base_url.is_empty(),
+            }
+    }
+
+    /// True when forwarding mode is wired: same provider dialect as assist,
+    /// plus a model name. Off by default so the extractive path stays the
+    /// local default; upstream failures fall back to it per request.
+    pub fn forward_enabled(&self) -> bool {
+        !self.forward_model.is_empty()
+            && self.forward_timeout_ms > 0
+            && match self.forward_provider.as_str() {
+                "google" => !self.forward_api_key.is_empty(),
+                _ => !self.forward_base_url.is_empty(),
+            }
     }
 
     /// Chars a section's body may use: its share of the content budget (the
@@ -406,6 +504,51 @@ mod tests {
         assert_eq!(cfg.assist_max_chunks, 2);
         apply_json(&mut cfg, &json!({ "assist_timeout_ms": 0 }));
         assert!(!cfg.assist_enabled());
+    }
+
+    #[test]
+    fn google_assist_needs_key_not_base_url() {
+        let mut cfg = defaults();
+        apply_json(&mut cfg, &json!({ "assist_provider": "google", "assist_model": "gemini-3-flash" }));
+        // Google without a key stays off; a key turns it on with no base URL.
+        assert!(!cfg.assist_enabled());
+        apply_json(&mut cfg, &json!({ "assist_api_key": "AIza-test" }));
+        assert!(cfg.assist_enabled());
+        // A key alone must not enable the OpenAI dialect.
+        let mut openai = defaults();
+        apply_json(&mut openai, &json!({ "assist_api_key": "AIza-test" }));
+        assert!(!openai.assist_enabled());
+    }
+
+    #[test]
+    fn forwarding_defaults_off_and_both_providers_gate_on() {
+        let mut cfg = defaults();
+        assert!(!cfg.forward_enabled());
+        apply_json(
+            &mut cfg,
+            &json!({ "forward_base_url": "http://llama:8080/v1", "forward_model": "qwen3-32b" }),
+        );
+        assert!(cfg.forward_enabled());
+        assert_eq!(cfg.forward_timeout_ms, 90000);
+        assert_eq!(cfg.forward_max_tokens, 2048);
+        apply_json(&mut cfg, &json!({ "forward_model": "" }));
+        assert!(!cfg.forward_enabled());
+
+        let mut g = defaults();
+        apply_json(&mut g, &json!({ "forward_provider": "google", "forward_model": "gemini-3-flash" }));
+        assert!(!g.forward_enabled());
+        apply_json(&mut g, &json!({ "forward_api_key": "AIza-test" }));
+        assert!(g.forward_enabled());
+        apply_json(&mut g, &json!({ "forward_timeout_ms": 0 }));
+        assert!(!g.forward_enabled());
+    }
+
+    #[test]
+    fn template_headings_toggle() {
+        let mut cfg = defaults();
+        assert!(!cfg.template_headings);
+        apply_json(&mut cfg, &json!({ "template_headings": true }));
+        assert!(cfg.template_headings);
     }
 
     #[test]

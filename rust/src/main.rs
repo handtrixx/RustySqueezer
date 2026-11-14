@@ -1,5 +1,6 @@
 mod assist;
 mod config;
+mod forward;
 mod summary;
 mod text;
 
@@ -15,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use config::Config;
 use summary::build_summary;
-use text::{count_tokens, msg_text};
+use text::{clip, count_tokens, msg_text};
 
 async fn health(State(cfg): State<Config>) -> impl IntoResponse {
     Json(serde_json::json!({
@@ -24,7 +25,11 @@ async fn health(State(cfg): State<Config>) -> impl IntoResponse {
         "max_summary_chars": cfg.max_summary_chars,
         "tail_turns": cfg.tail_turns,
         "assist": cfg.assist_enabled(),
+        "assist_provider": cfg.assist_provider,
         "assist_model": if cfg.assist_enabled() { cfg.assist_model.as_str() } else { "" },
+        "forward": cfg.forward_enabled(),
+        "forward_provider": cfg.forward_provider,
+        "forward_model": if cfg.forward_enabled() { cfg.forward_model.as_str() } else { "" },
     }))
 }
 
@@ -53,6 +58,29 @@ fn thread_from_body(body: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Summarize a thread: with forwarding mode configured, pass it to the real
+/// upstream model; on any upstream failure log and fall back to the extractive
+/// summary, so the endpoint never fails because of the upstream. The answer is
+/// clipped to the same max_summary_chars budget the extractive path enforces.
+async fn summarize(cfg: &Config, messages: &[Value], body: &Value) -> (String, Option<usize>, Option<usize>) {
+    if cfg.forward_enabled() {
+        match forward::forward(messages, body, cfg).await {
+            Ok(f) => {
+                println!(
+                    "[forward] provider={} model={} in={} out={}",
+                    cfg.forward_provider,
+                    cfg.forward_model,
+                    f.in_tokens.unwrap_or(0),
+                    f.out_tokens.unwrap_or(0)
+                );
+                return (clip(&f.text, cfg.max_summary_chars), f.in_tokens, f.out_tokens);
+            }
+            Err(e) => eprintln!("[forward] {e}; falling back to extractive summary"),
+        }
+    }
+    (build_summary(messages, cfg).await, None, None)
+}
+
 async fn completions(State(cfg): State<Config>, Json(body): Json<Value>) -> Response {
     let started = Instant::now();
     let messages = thread_from_body(&body);
@@ -61,10 +89,11 @@ async fn completions(State(cfg): State<Config>, Json(body): Json<Value>) -> Resp
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
 
-    let summary = build_summary(&messages, &cfg).await;
+    let (summary, fwd_in, fwd_out) = summarize(&cfg, &messages, &body).await;
 
-    let prompt_tokens: usize = messages.iter().map(|m| count_tokens(&msg_text(m))).sum();
-    let completion_tokens = count_tokens(&summary);
+    let prompt_tokens: usize = fwd_in
+        .unwrap_or_else(|| messages.iter().map(|m| count_tokens(&msg_text(m))).sum());
+    let completion_tokens = fwd_out.unwrap_or_else(|| count_tokens(&summary));
     let usage = serde_json::json!({
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
@@ -148,9 +177,10 @@ async fn anthropic_messages(State(cfg): State<Config>, Json(body): Json<Value>) 
     if let Some(system) = body.get("system").and_then(|s| s.as_str()) {
         messages.insert(0, serde_json::json!({"role": "system", "content": system}));
     }
-    let summary = build_summary(&messages, &cfg).await;
-    let input_tokens: usize = messages.iter().map(|m| count_tokens(&msg_text(m))).sum();
-    let output_tokens = count_tokens(&summary);
+    let (summary, fwd_in, fwd_out) = summarize(&cfg, &messages, &body).await;
+    let input_tokens: usize = fwd_in
+        .unwrap_or_else(|| messages.iter().map(|m| count_tokens(&msg_text(m))).sum());
+    let output_tokens = fwd_out.unwrap_or_else(|| count_tokens(&summary));
     log_usage("anthropic", input_tokens, output_tokens, started.elapsed());
     let model = body
         .get("model")
@@ -236,9 +266,10 @@ async fn anthropic_messages(State(cfg): State<Config>, Json(body): Json<Value>) 
 async fn ollama_chat(State(cfg): State<Config>, Json(body): Json<Value>) -> Response {
     let started = Instant::now();
     let messages = thread_from_body(&body);
-    let summary = build_summary(&messages, &cfg).await;
-    let prompt_tokens: usize = messages.iter().map(|m| count_tokens(&msg_text(m))).sum();
-    let eval_count = count_tokens(&summary);
+    let (summary, fwd_in, fwd_out) = summarize(&cfg, &messages, &body).await;
+    let prompt_tokens: usize = fwd_in
+        .unwrap_or_else(|| messages.iter().map(|m| count_tokens(&msg_text(m))).sum());
+    let eval_count = fwd_out.unwrap_or_else(|| count_tokens(&summary));
     log_usage("ollama-chat", prompt_tokens, eval_count, started.elapsed());
     let model = body
         .get("model")

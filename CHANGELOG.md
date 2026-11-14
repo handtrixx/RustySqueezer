@@ -2,6 +2,32 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.2.0 - 2026-11-14
+- **Google LLM backend for the assist.** `assist_provider: "google"` condenses
+  the key-point bullets via the Gemini REST API (`assist_api_key`, base URL
+  optional); the local llama.cpp dialect stays the default. Same fallback as
+  before: any failed chunk keeps its extractive bullets.
+- **Forwarding mode (roadmap item 18).** `forward_base_url` /
+  `forward_provider: "google"` + `forward_model` pass the request through to a
+  real model instead of answering extractively, so a narrative Google summary
+  works for OpenCode/OpenChamber compaction. Off by default; on any upstream
+  failure (timeout, HTTP error, unusable body) the extractive summary is
+  produced and the failure is logged. Tool schemas are sanitized to the
+  keyword subset Gemini accepts (`exclusiveMinimum`/`exclusiveMaximum` become
+  inclusive integer bounds, `$ref`s inlined, draft-2020-12 keywords dropped) -
+  OpenCode v2.3.0 sends session tool schemas with its compaction request and
+  Gemini rejects them outright. For the native Google provider tools are
+  dropped instead (a compaction answer never calls tools).
+- **Template headings (item 16).** `template_headings: true` echoes the
+  harness template's own `## ...` heading lines from the compaction
+  instruction instead of the crate titles; off keeps Zed byte-identical.
+- **File list drops URL tokens (item 13).** `//opencode.ai/config.json` and
+  `wiki.niklas-stephan.de/page.md` have a domain-like first segment and are
+  no longer listed as files.
+- **Errors not duplicated in key points (item 14).** A sentence that repeats
+  a line already listed under Errors is dropped from the key-point pool.
+- `/health` reports `forward`, `forward_provider` and `assist_provider`.
+
 ## v1.1.3 - 2026-11-13
 - **Objective recovery from contaminated checkpoints.** Real contamination
   (observed on a 14-round OpenChamber session) embeds the previous checkpoint

@@ -45,9 +45,18 @@
     "tail": "Most recent turns (verbatim, clipped)"
   },
   "assist_base_url": "",
+  "assist_provider": "openai",
+  "assist_api_key": "",
   "assist_model": "qwen3.5-2b",
   "assist_timeout_ms": 45000,
   "assist_max_chunks": 3,
   "assist_chunk_chars": 700,
-  "assist_max_tokens": 140
+  "assist_max_tokens": 140,
+  "forward_base_url": "",
+  "forward_provider": "openai",
+  "forward_api_key": "",
+  "forward_model": "",
+  "forward_timeout_ms": 90000,
+  "forward_max_tokens": 2048,
+  "template_headings": false
 }

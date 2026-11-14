@@ -275,6 +275,31 @@ fn section_body(lines: &[String], cap: usize, label: &str) -> String {
     body
 }
 
+/// Map a harness template heading to a canonical section key by keyword.
+/// Order matters: "Commands run (most recent first)" must resolve to
+/// commands, not tail, so specific keys are tested before generic ones.
+fn template_section_key(heading: &str) -> Option<&'static str> {
+    let h = heading.to_lowercase();
+    let rules: [(&str, &str); 15] = [
+        ("summary", "header"),
+        ("follow", "followups"),
+        ("command", "commands"),
+        ("file", "files"),
+        ("path", "files"),
+        ("tool", "tools"),
+        ("error", "errors"),
+        ("problem", "errors"),
+        ("key point", "key_points"),
+        ("important", "key_points"),
+        ("objective", "original_task"),
+        ("original", "original_task"),
+        ("task", "original_task"),
+        ("request", "original_task"),
+        ("recent", "tail"),
+    ];
+    rules.iter().find(|(k, _)| h.contains(k)).map(|(_, s)| *s)
+}
+
 pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     let mut thread: Vec<Value> = messages.to_vec();
     // Zed appends the compaction instruction as the final user message.
@@ -287,6 +312,24 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
             thread.pop();
         }
     }
+
+    // template_headings (roadmap item 16): when the compaction instruction
+    // embeds the harness template's own `## ...` headings, echo those exact
+    // lines instead of the crate titles - OpenCode v2.3.0 validates the
+    // checkpoint against the template's heading lines verbatim.
+    let mut cfg_owned: Option<Config> = None;
+    if cfg.template_headings {
+        let mut c = cfg.clone();
+        for line in instruction.lines() {
+            if let Some(h) = line.strip_prefix("## ") {
+                if let Some(key) = template_section_key(h) {
+                    c.titles.insert(key.to_string(), h.trim().to_string());
+                }
+            }
+        }
+        cfg_owned = Some(c);
+    }
+    let cfg = cfg_owned.as_ref().unwrap_or(cfg);
 
     let mut system = String::new();
     let mut user_msgs: Vec<Value> = Vec::new();
@@ -493,6 +536,9 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         }
     }
     let errors = dedup_keep_order(&errors, cfg.max_errors);
+    // Item 14: an error string already shown in the Errors section must not
+    // spend budget again in the key-points section (same wording, twice).
+    let error_set: HashSet<String> = errors.iter().map(|e| normalize(e)).collect();
     if cfg.section_enabled("errors") && !errors.is_empty() {
         parts.push(format!(
             "\n## {}\n{}",
@@ -561,6 +607,17 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
         *occurrences.entry(normalize(s)).or_insert(0) += 1;
     }
     pool.retain(|(s, _)| seen.insert(normalize(s)));
+    // A sentence that repeats a line already listed under Errors is pure
+    // budget duplication - drop it. Only sentences that are themselves errors
+    // may be dropped: a non-error sentence that merely sits inside the same
+    // error line ("Health stayed ok on ...") is a distinct fact and survives.
+    pool.retain(|(s, _)| {
+        if !has_error(s, cfg) {
+            return true;
+        }
+        let n = normalize(s);
+        !error_set.iter().any(|e| n.contains(e.as_str()) || e.contains(n.as_str()))
+    });
     let mut key = score_sentences(&pool, &task_terms, 2.0, cfg, &occurrences);
     // Order by score descending, then text descending, so ties are stable
     // and the output is reproducible.
@@ -764,6 +821,66 @@ mod tests {
             summary.contains("172.19.0.20") && summary.contains("189312"),
             "tool-output facts lost from key points:\n{summary}"
         );
+    }
+
+    #[tokio::test]
+    async fn error_lines_not_duplicated_in_key_points() {
+        let cfg = Config::from_env();
+        let err = "rsync: [sender] send_files failed to open compose.yml: Permission denied (13)";
+        let thread = vec![
+            json!({"role": "user", "content": "deploy the compactor"}),
+            json!({
+                "role": "assistant",
+                "content": format!("Deployment problem: {err}. Health stayed ok on 172.19.0.20, 189 tests passed."),
+            }),
+            json!({"role": "user", "content": "Please summarize the conversation so far so the agent can continue."}),
+        ];
+        let s = build_summary(&thread, &cfg).await;
+        let errors = s.split("## Errors / problems seen").nth(1).unwrap().split("## ").next().unwrap();
+        assert!(errors.contains("Permission denied"), "error missing from Errors:\n{s}");
+        let kp = s
+            .split("## Key points from the assistant")
+            .nth(1)
+            .unwrap()
+            .split("## ")
+            .next()
+            .unwrap();
+        assert!(
+            !kp.contains("Permission denied (13)"),
+            "error repeated in key points:\n{kp}"
+        );
+        // The distinct non-error fact survives.
+        assert!(kp.contains("172.19.0.20") || kp.contains("189 tests passed"), "{kp}");
+    }
+
+    #[tokio::test]
+    async fn template_headings_echo_the_prompts_own_titles() {
+        let mut cfg = Config::from_env();
+        cfg.template_headings = true;
+        let instruction = "Summarize the conversation so far.\n\
+            ## Objective\nKeep it short.\n\
+            ## Commands run\n- what the harness expects\n\
+            ## Key points from the assistant\n- what the harness expects\n\
+            ## Most recent turns\n- what the harness expects";
+        let thread = vec![
+            json!({"role": "user", "content": "continue developing rustysqueezer"}),
+            json!({
+                "role": "assistant",
+                "content": "running the build now",
+                "tool_calls": [{ "function": { "name": "shell", "arguments": "{\"command\":\"cargo test\"}" } }],
+            }),
+            json!({"role": "user", "content": instruction}),
+        ];
+        let s = build_summary(&thread, &cfg).await;
+        assert!(s.contains("## Objective"), "template heading lost:\n{s}");
+        assert!(s.contains("## Commands run"));
+        assert!(s.contains("## Key points from the assistant"));
+        assert!(s.contains("## Most recent turns"));
+        // Off keeps the crate default titles byte-identically.
+        cfg.template_headings = false;
+        let s2 = build_summary(&thread, &cfg).await;
+        assert!(!s2.contains("## Objective"));
+        assert!(s2.contains("## Original task"));
     }
 
     #[tokio::test]
