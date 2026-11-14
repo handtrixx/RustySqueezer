@@ -191,8 +191,9 @@ pub(crate) fn gemini_text(v: &Value) -> Option<String> {
     }
 }
 
-fn usage_tokens(v: &Value, keys: [&str; 2]) -> (Option<usize>, Option<usize>) {
-    let u = v.get("usage");
+fn usage_tokens(v: &Value, container: &str, keys: [&str; 2]) -> (Option<usize>, Option<usize>) {
+    // Gemini reports counts under `usageMetadata`, OpenAI under `usage`.
+    let u = v.get(container);
     (
         u.and_then(|x| x.get(keys[0])).and_then(|n| n.as_u64()).map(|n| n as usize),
         u.and_then(|x| x.get(keys[1])).and_then(|n| n.as_u64()).map(|n| n as usize),
@@ -257,9 +258,9 @@ pub async fn forward(messages: &[Value], body: &Value, cfg: &Config) -> Result<F
     };
     let text = text.ok_or_else(|| "upstream returned an empty completion".to_string())?;
     let (in_tokens, out_tokens) = if cfg.forward_provider == "google" {
-        usage_tokens(&v, ["promptTokenCount", "candidatesTokenCount"])
+        usage_tokens(&v, "usageMetadata", ["promptTokenCount", "candidatesTokenCount"])
     } else {
-        usage_tokens(&v, ["prompt_tokens", "completion_tokens"])
+        usage_tokens(&v, "usage", ["prompt_tokens", "completion_tokens"])
     };
     Ok(Forwarded {
         text,
@@ -273,6 +274,15 @@ mod tests {
     use super::*;
     use crate::config::defaults;
     use serde_json::json;
+
+    #[test]
+    fn usage_counts_read_gemini_and_openai_containers() {
+        let gemini = json!({"candidates": [], "usageMetadata": {"promptTokenCount": 42, "candidatesTokenCount": 7}});
+        assert_eq!(usage_tokens(&gemini, "usageMetadata", ["promptTokenCount", "candidatesTokenCount"]), (Some(42), Some(7)));
+        let openai = json!({"choices": [], "usage": {"prompt_tokens": 18, "completion_tokens": 4}});
+        assert_eq!(usage_tokens(&openai, "usage", ["prompt_tokens", "completion_tokens"]), (Some(18), Some(4)));
+        assert_eq!(usage_tokens(&json!({}), "usageMetadata", ["promptTokenCount", "candidatesTokenCount"]), (None, None));
+    }
 
     #[test]
     fn sanitize_converts_exclusive_bounds_and_drops_unsupported_keywords() {

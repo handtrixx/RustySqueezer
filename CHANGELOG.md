@@ -2,6 +2,12 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.2.3 - 2026-11-14
+- **Gemini usage counts.** The Gemini REST response carries token counts under
+  `usageMetadata`, not `usage`, so forwarded Google requests logged `in=0
+  out=0`. `usage_tokens()` now reads the provider's container
+  (`usageMetadata` for google, `usage` for OpenAI-compatible upstreams).
+
 ## v1.2.2 - 2026-11-14
 - **Tail budget weights the newest turn (roadmap item 15).** The flat
   per-turn cap clipped the final assistant answer mid-sentence while the
