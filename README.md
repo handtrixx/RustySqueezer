@@ -145,7 +145,7 @@ Two layers, both optional:
 | `MODEL_NAME` | `rustysqueezer` | model id on `/v1/models` |
 | `CONFIG_PATH` | unset | JSON config file (see above) |
 | `MAX_SUMMARY_CHARS` | `12000` | hard cap on the summary, split per section |
-| `TAIL_TURNS` / `TAIL_CHARS` | `6` / `600` | verbatim tail: how many turns, how long each |
+| `TAIL_TURNS` / `TAIL_CHARS` | `6` / `600` | verbatim tail: how many turns; each keeps at least this many chars, and the newest turn gets half of the tail budget (v1.2.2) |
 | `MAX_COMMANDS` / `MAX_FILES` / `MAX_ERRORS` / `MAX_KEY_POINTS` | `25` / `60` / `20` / `40` | per-section item caps |
 
 ### Token counting
@@ -319,9 +319,9 @@ Output quality gaps seen in the OpenCode/OpenChamber integration (2026-11-09):
     context.
 14. Deduplicate errors against key points: the same error string can appear in
     both the Errors section and Important Context, wasting budget.
-15. Tail truncation clips long final answers mid-sentence (`tail_chars: 600`).
-    Budget per tail turn instead of a flat per-turn character cap, or raise the
-    default so the last assistant turn survives intact.
+15. ~~Tail truncation clips long final answers mid-sentence (`tail_chars: 600`)~~ -
+    done 2026-11-14 (v1.2.2): the tail budget is weighted by position, the newest
+    turn gets half of it, so the last assistant answer survives intact.
 16. Emit OpenCode's template headings natively: OpenCode v2.2.6 validates
     compaction summaries (at least one line must exactly equal a `##` heading
     of its template). Deployed workaround (2026-11-09) is config-only: the

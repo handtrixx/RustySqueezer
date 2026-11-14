@@ -27,7 +27,7 @@ The canonical set of keys is in
 | --- | --- | --- |
 | `model_name` | `rustysqueezer` | Reported model id on discovery endpoints |
 | `max_summary_chars` | 12000 | Hard cap on the generated summary |
-| `tail_turns` / `tail_chars` | 6 / 600 | How many recent turns are kept verbatim, and how far each is clipped |
+| `tail_turns` / `tail_chars` | 6 / 600 | How many recent turns are kept verbatim; `tail_chars` is a per-turn floor, and the newest turn gets half of the tail section's budget (v1.2.2) |
 | `max_commands` | 25 | Shell commands retained (most recent first) |
 | `max_files` | 60 | File paths retained |
 | `max_errors` | 20 | Error lines retained |

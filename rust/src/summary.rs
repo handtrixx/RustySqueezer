@@ -682,17 +682,25 @@ pub async fn build_summary(messages: &[Value], cfg: &Config) -> String {
     let tail_cap = cfg
         .section_cap("tail", content_budget, total_share)
         .saturating_sub(40);
-    // TAIL_CHARS is a floor, not a ceiling: if the tail's budget allows more per
-    // turn (e.g. 50 % of 12000 over 6 turns = ~950), use it. Otherwise the final
-    // assistant summary gets clipped while the section still has headroom.
-    let per_turn = cfg.tail_chars.max(tail_cap / cfg.tail_turns.max(1));
+    // TAIL_CHARS is a floor, not a ceiling (roadmap item 15): the tail budget
+    // is weighted toward the newest turn - it is the one the agent continues
+    // from, so it gets half of the allocation; earlier turns share the rest.
+    // A single tail turn gets the whole budget.
+    let turns: Vec<&Value> = thread[tail_start..]
+        .iter()
+        .filter(|m| !cfg.checkpoint_re.is_match(&msg_text(m)))
+        .collect();
+    let last_cap = if turns.len() <= 1 { tail_cap } else { tail_cap / 2 };
+    let rest_cap = if turns.len() > 1 {
+        (tail_cap - last_cap) / (turns.len() - 1)
+    } else {
+        0
+    };
     let mut tail_lines = Vec::new();
-    for m in &thread[tail_start..] {
-        // An injected checkpoint is not a turn the agent continues from; the
-        // flattening above already carries its content forward.
-        if cfg.checkpoint_re.is_match(&msg_text(m)) {
-            continue;
-        }
+    for (i, m) in turns.iter().enumerate() {
+        let per_turn = cfg
+            .tail_chars
+            .max(if i + 1 == turns.len() { last_cap } else { rest_cap });
         let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("?");
         let mut text = clip(&msg_text(m), per_turn);
         if let Some(calls) = m.get("tool_calls").and_then(|v| v.as_array()) {
@@ -932,6 +940,32 @@ mod tests {
             s.contains("docker compose ps"),
             "verbatim tail must survive"
         );
+    }
+
+    #[tokio::test]
+    async fn tail_budget_favors_the_last_turn() {
+        // Roadmap item 15: a flat per-turn cap clipped the final assistant
+        // answer mid-sentence while the section had headroom. The newest turn
+        // now gets half of the tail budget, older turns share the rest.
+        let mut cfg = Config::from_env();
+        cfg.max_summary_chars = 8000;
+        cfg.tail_turns = 3;
+        cfg.tail_chars = 10;
+        let older = "y ".repeat(300);
+        let last = "z ".repeat(400);
+        let thread: Vec<Value> = vec![
+            json!({"role": "user", "content": "task"}),
+            json!({"role": "assistant", "content": older.clone()}),
+            json!({"role": "tool", "content": older}),
+            json!({"role": "assistant", "content": last.clone()}),
+        ];
+        let s = build_summary(&thread, &cfg).await;
+        let tail = s.split("Most recent turns").nth(1).expect("tail section");
+        let lines: Vec<&str> = tail.split("
+").filter(|l| l.starts_with("[")).collect();
+        assert_eq!(lines.len(), 3, "all three tail turns listed");
+        assert!(s.contains(last.trim()), "the final answer must survive intact");
+        assert!(lines[2].len() > lines[0].len(), "newest turn keeps the bigger share");
     }
 
     #[test]

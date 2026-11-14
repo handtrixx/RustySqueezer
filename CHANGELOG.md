@@ -2,6 +2,14 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.2.2 - 2026-11-14
+- **Tail budget weights the newest turn (roadmap item 15).** The flat
+  per-turn cap clipped the final assistant answer mid-sentence while the
+  tail section still had headroom. The tail budget is now split by
+  position: the newest turn gets half of the allocation, earlier tail
+  turns share the rest; TAIL_CHARS stays a floor per turn. Verified by
+  unit test (final answer survives intact, older turns clipped shorter).
+
 ## v1.2.1 - 2026-11-14
 - **TLS for HTTPS upstreams.** reqwest was compiled without a TLS connector
   (default-features off, only json), so forwarding mode and the Google
