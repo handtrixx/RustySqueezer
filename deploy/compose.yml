@@ -1,0 +1,74 @@
+# Deployment template for rustysqueezer (deploy-only directory on the host,
+# e.g. /data/docker/rustysqueezer). CI publishes the image to GHCR; nothing
+# here builds from source. Internal-only: no reverse-proxy route needed - a
+# gateway or your agent points its compaction endpoint at http://rustysqueezer:8000.
+#
+# The optional rsq-aux service runs the small model the assist calls into.
+# Remove it and clear ASSIST_BASE_URL (or set ASSIST_TIMEOUT_MS=0) to run
+# without condensing.
+services:
+  rustysqueezer:
+    image: ${RUSTYSQUEEZER_IMAGE:-ghcr.io/handtrixx/rustysqueezer:latest}
+    container_name: rustysqueezer
+    restart: unless-stopped
+    networks:
+      - caddy
+    environment:
+      MODEL_NAME: ${MODEL_NAME:-rustysqueezer}
+      MAX_SUMMARY_CHARS: ${MAX_SUMMARY_CHARS:-12000}
+      TAIL_TURNS: ${TAIL_TURNS:-6}
+      TAIL_CHARS: ${TAIL_CHARS:-600}
+      MAX_COMMANDS: ${MAX_COMMANDS:-25}
+      MAX_FILES: ${MAX_FILES:-60}
+      MAX_ERRORS: ${MAX_ERRORS:-20}
+      MAX_KEY_POINTS: ${MAX_KEY_POINTS:-40}
+      CONFIG_PATH: ${CONFIG_PATH:-/config.json}
+      # Assist: on when a base URL is set (openai) or an API key is set
+      # (google, ASSIST_PROVIDER=google + ASSIST_BASE_URL unset); off when the
+      # URL is empty or ASSIST_TIMEOUT_MS=0.
+      ASSIST_BASE_URL: ${ASSIST_BASE_URL:-http://rsq-aux:8080/v1}
+      ASSIST_MODEL: ${ASSIST_MODEL:-qwen3.5-2b}
+      ASSIST_PROVIDER: ${ASSIST_PROVIDER:-openai}
+      ASSIST_API_KEY: ${ASSIST_API_KEY:-}
+      ASSIST_TIMEOUT_MS: ${ASSIST_TIMEOUT_MS:-45000}
+      ASSIST_MAX_CHUNKS: ${ASSIST_MAX_CHUNKS:-3}
+      ASSIST_CHUNK_CHARS: ${ASSIST_CHUNK_CHARS:-700}
+      ASSIST_MAX_TOKENS: ${ASSIST_MAX_TOKENS:-140}
+      # Forwarding (optional): pass uncompactable requests to a real model.
+      # On when FORWARD_MODEL is set plus FORWARD_BASE_URL (openai) or
+      # FORWARD_API_KEY (google, FORWARD_PROVIDER=google). Keep caps live in
+      # config.json (forward_keep_messages, forward_max_chars).
+      FORWARD_BASE_URL: ${FORWARD_BASE_URL:-}
+      FORWARD_PROVIDER: ${FORWARD_PROVIDER:-openai}
+      FORWARD_MODEL: ${FORWARD_MODEL:-}
+      FORWARD_API_KEY: ${FORWARD_API_KEY:-}
+      FORWARD_TIMEOUT_MS: ${FORWARD_TIMEOUT_MS:-120000}
+      FORWARD_MAX_TOKENS: ${FORWARD_MAX_TOKENS:-4096}
+    volumes:
+      - ./config.json:/config.json:ro
+    healthcheck:
+      test: ["CMD", "/rustysqueezer", "--health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  rsq-aux:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: rsq-aux
+    restart: unless-stopped
+    networks: [caddy]
+    volumes:
+      - /data/models:/models:ro
+    command: >
+      -m /models/Qwen3.5-2B-Q4_K_M.gguf --host 0.0.0.0
+      -t 6 -c 4096 -b 1024 -ub 512 --jinja
+      --reasoning off --parallel 3
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  caddy:
+    external: true
