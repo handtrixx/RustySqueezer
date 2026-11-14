@@ -338,6 +338,18 @@ Output quality gaps seen in the OpenCode/OpenChamber integration (2026-11-09):
     ASSIST path (one big generative summary) stays dead - this design only
     asks the 2B model to condense passages it can actually handle.
 
+18. Forwarding mode to a real model (OpenCode/OpenChamber compaction,
+    2026-11-14): OpenCode v2.3.0 sends the session tool schemas with its
+    compaction request; Google's Gemini rejects draft-2020-12 keywords
+    (`Unknown name "exclusiveMinimum" at tools[...].function_declarations`),
+    so `/compact` fails when `agents.compaction.model` points at
+    `omniroute/gemini-3.5-flash-lite` (denying tools for the compaction agent
+    does not remove them from the request). Plan: give RustySqueezer a
+    forwarding option - pass the request through to a configured upstream
+    model (e.g. Gemini), sanitizing tool schemas (drop `exclusiveMinimum` /
+    draft-2020-12 keywords) so a narrative Google summary works while the
+    extractive path stays the local default.
+
 ## License
 
 MIT - see [LICENSE](LICENSE). History is in [CHANGELOG.md](CHANGELOG.md).
