@@ -2,6 +2,15 @@
 
 All notable changes to `rustysqueezer`. Dates are commit dates on `main`.
 
+## v1.2.1 - 2026-11-14
+- **TLS for HTTPS upstreams.** reqwest was compiled without a TLS connector
+  (default-features off, only json), so forwarding mode and the Google
+  assist backend failed against any https endpoint ("error sending request")
+  while plain http to the local aux server worked. Added reqwest's
+  rustls-tls feature: embedded webpki roots, no system CA store needed on
+  scratch. Verified live: forwarding to an https gateway upstream now returns
+  the model's reply instead of falling back extractively.
+
 ## v1.2.0 - 2026-11-14
 - **Google LLM backend for the assist.** `assist_provider: "google"` condenses
   the key-point bullets via the Gemini REST API (`assist_api_key`, base URL
