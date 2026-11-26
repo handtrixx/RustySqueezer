@@ -1,6 +1,6 @@
 # Pinned toolchain; Dependabot bumps this tag (see .github/dependabot.yml)
 # so base-image updates arrive as PRs that CI builds and eval-tests.
-FROM rust:1.99-alpine AS builder
+FROM rust:1.100-alpine AS builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src src
